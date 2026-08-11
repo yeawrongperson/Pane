@@ -13,7 +13,6 @@ $testProject = Join-Path $repoRoot 'tests\Wallflow.Core.Tests\Wallflow.Core.Test
 $versionProps = Join-Path $repoRoot 'Directory.Build.props'
 $releaseRoot = Join-Path $repoRoot 'artifacts\releases'
 $publishRoot = Join-Path $repoRoot 'artifacts\publish'
-$smokeProcess = $null
 
 function Invoke-Native([string]$FilePath, [string[]]$Arguments) {
     Write-Host "`n> $FilePath $($Arguments -join ' ')" -ForegroundColor DarkGray
@@ -49,6 +48,25 @@ function Wait-FileReadable([string]$Path, [int]$TimeoutSeconds = 15) {
             Start-Sleep -Milliseconds 500
         }
     } while ($true)
+}
+
+function Invoke-PaneSmokeTest([string]$ExecutablePath, [string]$WorkingDirectory, [int]$TimeoutSeconds = 30) {
+    $process = Start-Process -FilePath $ExecutablePath -ArgumentList '--smoke-test' -WorkingDirectory $WorkingDirectory -PassThru
+    try {
+        if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            $process.WaitForExit(5000) | Out-Null
+            throw "Pane isolated smoke test timed out after $TimeoutSeconds seconds."
+        }
+        if ($process.ExitCode -ne 0) { throw "Pane isolated smoke test failed with exit code $($process.ExitCode)." }
+    }
+    finally {
+        if (-not $process.HasExited) {
+            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            $process.WaitForExit(5000) | Out-Null
+        }
+        $process.Dispose()
+    }
 }
 
 function Get-PeMachine([string]$Path) {
@@ -137,10 +155,6 @@ try {
     Write-Host 'Pane Portable Release' -ForegroundColor Cyan
     Write-Host '========================================' -ForegroundColor Cyan
 
-    if (Get-Process Pane -ErrorAction SilentlyContinue) {
-        throw 'Pane is running and may lock release files. Exit Pane from its notification-area menu, then run the release again.'
-    }
-
     if (-not $Version) {
         [xml]$props = Get-Content -Raw -LiteralPath $versionProps
         $prefix = [string]$props.Project.PropertyGroup.VersionPrefix
@@ -220,19 +234,7 @@ try {
     $paneIcon = Join-Path $repoRoot 'src\Wallflow\Assets\Pane.ico'
     if (-not (Test-EmbeddedIcon $releaseExe $paneIcon)) { throw 'Pane.exe does not contain the expected Pane icon.' }
 
-    $smokeProcess = Start-Process -FilePath $releaseExe -WorkingDirectory $releaseDirectory -PassThru
-    $smokeReady = $false
-    for ($i = 0; $i -lt 40; $i++) {
-        Start-Sleep -Milliseconds 500
-        $smokeProcess.Refresh()
-        if ($smokeProcess.HasExited) { throw "Pane smoke test exited early with code $($smokeProcess.ExitCode)." }
-        if ($smokeProcess.MainWindowHandle -ne 0) { $smokeReady = $true; break }
-    }
-    if (-not $smokeReady) { throw 'Pane smoke test did not create a window within 20 seconds.' }
-    Stop-Process -Id $smokeProcess.Id -Force
-    $smokeProcess.WaitForExit(5000) | Out-Null
-    $smokeProcess.Dispose()
-    $smokeProcess = $null
+    Invoke-PaneSmokeTest $releaseExe $releaseDirectory
     Wait-FileReadable $releaseExe
 
     @"
@@ -316,7 +318,6 @@ This is an unsigned early beta. Windows SmartScreen may show an unknown-publishe
     Write-Host '========================================' -ForegroundColor Green
 }
 catch {
-    if ($smokeProcess -and -not $smokeProcess.HasExited) { Stop-Process -Id $smokeProcess.Id -Force -ErrorAction SilentlyContinue }
     Write-Host "`n========================================" -ForegroundColor Red
     Write-Host 'RELEASE ABORTED' -ForegroundColor Red
     Write-Host $_.Exception.Message -ForegroundColor Red

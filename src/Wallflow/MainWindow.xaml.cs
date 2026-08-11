@@ -16,12 +16,13 @@ namespace Wallflow;
 
 public sealed partial class MainWindow : Window
 {
-    private readonly IMonitorService _monitors = new WindowsMonitorService();
-    private readonly IWallpaperService _wallpaper = new DesktopWallpaperService();
-    private readonly string _settingsFolder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Pane");
-    private readonly ProfileStore _store;
+    private readonly PaneStartupOptions _startupOptions;
+    private readonly IMonitorService? _monitors;
+    private readonly IWallpaperService? _wallpaper;
+    private readonly string? _settingsFolder;
+    private readonly ProfileStore? _store;
     private readonly AppWindow _appWindow;
-    private readonly TrayIconService _trayIcon;
+    private readonly TrayIconService? _trayIcon;
     private readonly Dictionary<string, SlideshowSession> _sessions = [];
     private readonly LatestScanCoordinator<string> _folderScans = new();
     private List<MonitorInfo> _displayList = []; private List<MonitorWallpaperProfile> _profiles = []; private MonitorInfo? _selected;
@@ -33,37 +34,61 @@ public sealed partial class MainWindow : Window
     private bool _setupNameEditClosing;
     private bool _exitRequested;
 
-    public MainWindow()
+    public MainWindow(PaneStartupOptions startupOptions)
     {
-        _store = new ProfileStore(Path.Combine(_settingsFolder, "profiles.json"));
+        _startupOptions = startupOptions;
+        if (startupOptions.UsesPersistentProfileState)
+        {
+            _monitors = new WindowsMonitorService();
+            _settingsFolder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Pane");
+            _store = new ProfileStore(Path.Combine(_settingsFolder, "profiles.json"));
+        }
+        if (startupOptions.AllowsWallpaperChanges) _wallpaper = new DesktopWallpaperService();
         InitializeComponent(); ExtendsContentIntoTitleBar = true; SetTitleBar(AppTitleBar);
         _appWindow = GetAppWindow(); _appWindow.Resize(new SizeInt32(1100, 800));
         var windowIconPath = Path.Combine(AppContext.BaseDirectory, "Assets", "Pane.ico");
         if (File.Exists(windowIconPath)) _appWindow.SetIcon(windowIconPath);
         _appWindow.TitleBar.ButtonBackgroundColor = Colors.Transparent; _appWindow.TitleBar.ButtonInactiveBackgroundColor = Colors.Transparent;
-        _trayIcon = new TrayIconService(ShowAndActivate, ExitFromTray);
+        if (startupOptions.CreatesTrayIcon) _trayIcon = new TrayIconService(ShowAndActivate, ExitFromTray);
         _appWindow.Closing += (_, args) =>
         {
-            if (_exitRequested) return;
-            args.Cancel = true; _appWindow.Hide(); _trayIcon.ShowBackgroundNotice();
+            if (_startupOptions.IsSmokeTest || _exitRequested) return;
+            args.Cancel = true; _appWindow.Hide(); _trayIcon!.ShowBackgroundNotice();
         };
         RootGrid.Loaded += async (_, _) =>
         {
             if (_initialized) return;
             _initialized = true;
             InitializeSetupHeader();
+            if (_startupOptions.IsSmokeTest)
+            {
+                RootGrid.IsHitTestVisible = false;
+                if (!DispatcherQueue.TryEnqueue(CompleteSmokeTest))
+                    throw new InvalidOperationException("Pane smoke test could not schedule clean shutdown.");
+                return;
+            }
             await InitializeAsync();
         };
         RootGrid.AddHandler(UIElement.PointerPressedEvent, new PointerEventHandler(RootGrid_PointerPressed), true);
         Closed += async (_, _) =>
         {
             _folderScans.Dispose();
-            _trayIcon.Dispose();
+            _trayIcon?.Dispose();
+            if (_startupOptions.IsSmokeTest)
+            {
+                Application.Current.Exit();
+                return;
+            }
             foreach (var session in _sessions.Values) session.Stop();
             foreach (var session in _sessions.Values) await session.DisposeAsync();
-            await _store.SaveAsync(_profiles);
+            await Store.SaveAsync(_profiles);
         };
     }
+    private string SettingsFolder => _settingsFolder ?? throw new InvalidOperationException("Persistent Pane state is disabled.");
+    private ProfileStore Store => _store ?? throw new InvalidOperationException("Persistent Pane state is disabled.");
+    private IMonitorService Monitors => _monitors ?? throw new InvalidOperationException("Monitor initialization is disabled.");
+    private IWallpaperService Wallpaper => _wallpaper ?? throw new InvalidOperationException("Wallpaper changes are disabled.");
+    private void CompleteSmokeTest() { _exitRequested = true; Close(); }
     internal void ShowAndActivate()
     {
         if (_appWindow.Presenter is OverlappedPresenter { State: OverlappedPresenterState.Minimized } presenter)
@@ -156,7 +181,7 @@ public sealed partial class MainWindow : Window
             var name = _setupNameEditor.Text.Trim();
             if (!string.IsNullOrWhiteSpace(name))
             {
-                _setupNameText.Text = name; Directory.CreateDirectory(_settingsFolder); await File.WriteAllTextAsync(Path.Combine(_settingsFolder, "setup-name.txt"), name);
+                _setupNameText.Text = name; Directory.CreateDirectory(SettingsFolder); await File.WriteAllTextAsync(Path.Combine(SettingsFolder, "setup-name.txt"), name);
             }
         }
         EndSetupNameEdit(() => _setupNameEditClosing = false);
@@ -164,16 +189,17 @@ public sealed partial class MainWindow : Window
     private AppWindow GetAppWindow() => AppWindow.GetFromWindowId(Win32Interop.GetWindowIdFromWindow(WindowNative.GetWindowHandle(this)));
     private async Task InitializeAsync()
     {
-        MigrateLegacyProfiles();
-        var setupNamePath = Path.Combine(_settingsFolder, "setup-name.txt");
+        if (_startupOptions.RunsLegacyProfileMigration) MigrateLegacyProfiles();
+        var setupNamePath = Path.Combine(SettingsFolder, "setup-name.txt");
         if (File.Exists(setupNamePath))
         {
             var savedName = (await File.ReadAllTextAsync(setupNamePath)).Trim();
             if (!string.IsNullOrWhiteSpace(savedName)) _setupNameText.Text = savedName;
         }
-        try { _profiles = await _store.LoadAsync(); } catch { _profiles = []; }
+        try { _profiles = await Store.LoadAsync(); } catch { _profiles = []; }
         await RefreshAsync();
-        await Task.WhenAll(_displayList.Select(InitializePersistedSlideshowAsync));
+        if (_startupOptions.StartsPersistedSlideshows)
+            await Task.WhenAll(_displayList.Select(InitializePersistedSlideshowAsync));
     }
     private async Task InitializePersistedSlideshowAsync(MonitorInfo display)
     {
@@ -194,15 +220,15 @@ public sealed partial class MainWindow : Window
     }
     private void MigrateLegacyProfiles()
     {
-        Directory.CreateDirectory(_settingsFolder);
-        var paneProfiles = Path.Combine(_settingsFolder, "profiles.json");
+        Directory.CreateDirectory(SettingsFolder);
+        var paneProfiles = Path.Combine(SettingsFolder, "profiles.json");
         var legacyProfiles = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Wallflow", "profiles.json");
         if (!File.Exists(paneProfiles) && File.Exists(legacyProfiles)) File.Copy(legacyProfiles, paneProfiles);
     }
     private async Task RefreshAsync()
     {
         _folderScans.CancelAll();
-        _displayList = (await _monitors.GetMonitorsAsync()).ToList();
+        _displayList = (await Monitors.GetMonitorsAsync()).ToList();
         foreach (var display in _displayList)
             if (_profiles.All(p => p.MonitorId != display.Id)) _profiles.Add(new() { MonitorId = display.Id, MonitorDevicePath = display.DeviceName });
         SetupSummary.Text = $"{_displayList.Count} {(_displayList.Count == 1 ? "display" : "displays")} • {_profiles.Count(p => p.Mode == WallpaperMode.Slideshow && p.Enabled)} slideshows configured";
@@ -312,7 +338,7 @@ public sealed partial class MainWindow : Window
             {
                 _folderScans.Cancel(monitor.Id);
                 if (!File.Exists(profile.StaticImagePath) || !ImageCatalog.IsSupported(profile.StaticImagePath!)) { ValidationText.Text = "Choose a supported wallpaper image first."; return; }
-                await _wallpaper.SetWallpaperAsync(monitor.Id, profile.StaticImagePath!, profile.FitMode); profile.LastWallpaperPath = profile.StaticImagePath;
+                await Wallpaper.SetWallpaperAsync(monitor.Id, profile.StaticImagePath!, profile.FitMode); profile.LastWallpaperPath = profile.StaticImagePath;
             }
             else
             {
@@ -325,7 +351,7 @@ public sealed partial class MainWindow : Window
                 if (IntervalBox.SelectedItem is ComboBoxItem item && int.TryParse(item.Tag?.ToString(), out var minutes)) profile.SlideshowInterval = TimeSpan.FromMinutes(minutes);
                 await StartSlideshowAsync(monitor, profile, result.Files);
             }
-            await _store.SaveAsync(_profiles); ValidationText.Foreground = new SolidColorBrush(ColorHelper.FromArgb(255, 116, 221, 164)); ValidationText.Text = profile.Mode == WallpaperMode.Static ? "Wallpaper applied" : "Slideshow started"; SetupSummary.Text = $"{_displayList.Count} displays • {_profiles.Count(p => p.Mode == WallpaperMode.Slideshow && p.Enabled)} slideshows configured"; RenderMonitors();
+            await Store.SaveAsync(_profiles); ValidationText.Foreground = new SolidColorBrush(ColorHelper.FromArgb(255, 116, 221, 164)); ValidationText.Text = profile.Mode == WallpaperMode.Static ? "Wallpaper applied" : "Slideshow started"; SetupSummary.Text = $"{_displayList.Count} displays • {_profiles.Count(p => p.Mode == WallpaperMode.Slideshow && p.Enabled)} slideshows configured"; RenderMonitors();
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) { ValidationText.Foreground = new SolidColorBrush(ColorHelper.FromArgb(255, 255, 123, 134)); ValidationText.Text = ex.Message; }
@@ -340,7 +366,7 @@ public sealed partial class MainWindow : Window
     private async Task StartSlideshowAsync(MonitorInfo monitor, MonitorWallpaperProfile profile, IReadOnlyList<string> files)
     {
         if (_sessions.Remove(monitor.Id, out var old)) await old.DisposeAsync();
-        var session = new SlideshowSession(monitor, profile, new WallpaperTransitionService(_wallpaper), files);
+        var session = new SlideshowSession(monitor, profile, new WallpaperTransitionService(Wallpaper), files);
         session.WallpaperChanged += (_, path) => DispatcherQueue.TryEnqueue(() => { if (_selected?.Id == monitor.Id) SetPreview(path); RenderMonitors(); });
         _sessions[monitor.Id] = session; session.Start();
     }

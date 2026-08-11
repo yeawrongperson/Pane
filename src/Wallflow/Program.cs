@@ -14,8 +14,9 @@ public static class Program
     {
         WinRT.ComWrappersSupport.InitializeComWrappers();
 
+        var startupOptions = PaneStartupOptions.Parse(args);
         var activationArgs = AppInstance.GetCurrent().GetActivatedEventArgs();
-        var keyInstance = AppInstance.FindOrRegisterForKey(SingleInstanceActivationCoordinator.InstanceKey);
+        var keyInstance = AppInstance.FindOrRegisterForKey(startupOptions.InstanceKey);
         if (!keyInstance.IsCurrent)
         {
             // Awaiting in C# WinUI's async Main lets COM dispatch continue instead of blocking the STA.
@@ -31,7 +32,7 @@ public static class Program
         {
             var context = new DispatcherQueueSynchronizationContext(DispatcherQueue.GetForCurrentThread());
             SynchronizationContext.SetSynchronizationContext(context);
-            new App(activationCoordinator);
+            new App(activationCoordinator, startupOptions);
         });
     }
 }
