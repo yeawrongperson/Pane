@@ -9,3 +9,20 @@ obj/
 *.sln.docstates
 TestResults/
 artifacts/
+
+# Local secrets and private signing material
+.env
+.env.*
+!.env.example
+!.env.sample
+*.pfx
+*.p12
+*.p8
+*.pem
+*.key
+*.snk
+*.pvk
+secrets.json
+credentials.json
+client-secrets.json
+appsettings.*.local.json
