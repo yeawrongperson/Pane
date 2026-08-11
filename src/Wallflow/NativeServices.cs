@@ -81,6 +81,9 @@ internal sealed class DesktopWallpaperService : IWallpaperService
 
 internal static class WallpaperImageRenderer
 {
+    private static readonly WallpaperCacheManager Cache = new(Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Pane", "Cache"));
+
     public static Task<string> PrepareAsync(string sourcePath, int width, int height, WallpaperFit fit, CancellationToken token)
         => Task.Run(() => Prepare(sourcePath, width, height, fit, token), token);
 
@@ -89,12 +92,18 @@ internal static class WallpaperImageRenderer
         token.ThrowIfCancellationRequested();
         var signature = $"{sourcePath}|{File.GetLastWriteTimeUtc(sourcePath).Ticks}|{width}x{height}|{fit}";
         var name = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(signature))) + ".png";
-        var folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Wallflow", "Cache");
-        Directory.CreateDirectory(folder); var destination = Path.Combine(folder, name); if (File.Exists(destination)) return destination;
+        Cache.EnsureCacheDirectory(); var destination = Cache.GetCachePath(name);
+        if (File.Exists(destination)) { Cache.Touch(destination); Cache.PruneIfNeeded(); return destination; }
         using var source = Image.FromFile(sourcePath); using var output = new Bitmap(width, height, PixelFormat.Format24bppRgb); using var graphics = Graphics.FromImage(output);
         graphics.Clear(Color.Black); graphics.CompositingQuality = CompositingQuality.HighQuality; graphics.InterpolationMode = InterpolationMode.HighQualityBicubic; graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
         var target = GetTarget(source.Width, source.Height, width, height, fit); graphics.DrawImage(source, target); token.ThrowIfCancellationRequested();
-        var temporary = destination + ".tmp"; output.Save(temporary, ImageFormat.Png); File.Move(temporary, destination, true); return destination;
+        var temporary = Cache.CreateTemporaryPath(destination);
+        try
+        {
+            output.Save(temporary, ImageFormat.Png); File.Move(temporary, destination, true);
+            Cache.NotifyFileWritten(new FileInfo(destination).Length); return destination;
+        }
+        finally { Cache.TryDeleteTemporaryFile(temporary); }
     }
 
     private static Rectangle GetTarget(int imageWidth, int imageHeight, int monitorWidth, int monitorHeight, WallpaperFit fit)
