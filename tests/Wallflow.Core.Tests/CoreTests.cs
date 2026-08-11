@@ -18,8 +18,8 @@ namespace Wallflow.Core.Tests;
         {
             await File.WriteAllBytesAsync(Path.Combine(root, "one.jpg"), [1]); await File.WriteAllBytesAsync(Path.Combine(root, "two.png"), [1]);
             var transition = new RecordingTransition(); var monitor = new MonitorInfo("target-monitor", "DISPLAY1", "Display 1", 0, 0, 1920, 1080, true);
-            var profile = new MonitorWallpaperProfile { MonitorId = monitor.Id, Mode = WallpaperMode.Slideshow, SlideshowFolderPath = root, SlideshowInterval = TimeSpan.FromMilliseconds(20), ShuffleEnabled = false };
-            await using var session = new SlideshowSession(monitor, profile, transition); session.Start();
+            var profile = new MonitorWallpaperProfile { MonitorId = monitor.Id, Mode = WallpaperMode.Slideshow, SlideshowFolderPath = root, SlideshowInterval = TimeSpan.FromMinutes(1), ShuffleEnabled = false, LoopEnabled = false };
+            await using var session = new SlideshowSession(monitor, profile, transition, (_, _) => Task.CompletedTask); session.Start();
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2)); await transition.TwoChanges.Task.WaitAsync(timeout.Token);
             Assert.IsTrue(transition.MonitorIds.All(id => id == "target-monitor")); Assert.AreEqual(2, transition.Paths.Distinct().Count());
         }

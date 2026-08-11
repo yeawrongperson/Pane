@@ -67,7 +67,7 @@ internal sealed class DesktopWallpaperService : IWallpaperService
             // dimensions first, so a single neutral Stretch position preserves independent fit choices.
             desktop.SetPosition(DesktopWallpaperPosition.Stretch); desktop.SetWallpaper(monitorId, preparedPath);
         }
-        catch (COMException ex) { throw new InvalidOperationException("Windows could not apply the wallpaper to this display.", ex); }
+        catch (COMException ex) { throw new WallpaperItemException("Windows could not apply this wallpaper to the display.", ex); }
         finally { Marshal.FinalReleaseComObject(desktop); }
     }
     public Task<string?> GetWallpaperAsync(string monitorId, CancellationToken token = default)
@@ -94,7 +94,7 @@ internal static class WallpaperImageRenderer
         var name = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(signature))) + ".png";
         Cache.EnsureCacheDirectory(); var destination = Cache.GetCachePath(name);
         if (File.Exists(destination)) { Cache.Touch(destination); Cache.PruneIfNeeded(); return destination; }
-        using var source = Image.FromFile(sourcePath); using var output = new Bitmap(width, height, PixelFormat.Format24bppRgb); using var graphics = Graphics.FromImage(output);
+        using var source = LoadSourceImage(sourcePath); using var output = new Bitmap(width, height, PixelFormat.Format24bppRgb); using var graphics = Graphics.FromImage(output);
         graphics.Clear(Color.Black); graphics.CompositingQuality = CompositingQuality.HighQuality; graphics.InterpolationMode = InterpolationMode.HighQualityBicubic; graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
         var target = GetTarget(source.Width, source.Height, width, height, fit); graphics.DrawImage(source, target); token.ThrowIfCancellationRequested();
         var temporary = Cache.CreateTemporaryPath(destination);
@@ -104,6 +104,15 @@ internal static class WallpaperImageRenderer
             Cache.NotifyFileWritten(new FileInfo(destination).Length); return destination;
         }
         finally { Cache.TryDeleteTemporaryFile(temporary); }
+    }
+
+    private static Image LoadSourceImage(string sourcePath)
+    {
+        try { return Image.FromFile(sourcePath); }
+        catch (ArgumentException ex) { throw new WallpaperItemException("The wallpaper image could not be decoded.", ex); }
+        catch (ExternalException ex) { throw new WallpaperItemException("The wallpaper image could not be decoded.", ex); }
+        // GDI+ reports some corrupt or unsupported images as OutOfMemoryException.
+        catch (OutOfMemoryException ex) { throw new WallpaperItemException("The wallpaper image could not be decoded.", ex); }
     }
 
     private static Rectangle GetTarget(int imageWidth, int imageHeight, int monitorWidth, int monitorHeight, WallpaperFit fit)

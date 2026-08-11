@@ -19,7 +19,7 @@ public sealed class MonitorWallpaperProfile
     public WallpaperMode Mode { get; set; } = WallpaperMode.Static;
     public string? StaticImagePath { get; set; }
     public string? SlideshowFolderPath { get; set; }
-    public TimeSpan SlideshowInterval { get; set; } = TimeSpan.FromMinutes(5);
+    public TimeSpan SlideshowInterval { get; set; } = SlideshowPolicy.DefaultInterval;
     public bool ShuffleEnabled { get; set; } = true;
     public bool LoopEnabled { get; set; } = true;
     public WallpaperFit FitMode { get; set; } = WallpaperFit.Fill;
