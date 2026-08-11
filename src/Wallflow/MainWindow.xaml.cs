@@ -40,7 +40,7 @@ public sealed partial class MainWindow : Window
         var windowIconPath = Path.Combine(AppContext.BaseDirectory, "Assets", "Pane.ico");
         if (File.Exists(windowIconPath)) _appWindow.SetIcon(windowIconPath);
         _appWindow.TitleBar.ButtonBackgroundColor = Colors.Transparent; _appWindow.TitleBar.ButtonInactiveBackgroundColor = Colors.Transparent;
-        _trayIcon = new TrayIconService(ShowFromTray, ExitFromTray);
+        _trayIcon = new TrayIconService(ShowAndActivate, ExitFromTray);
         _appWindow.Closing += (_, args) =>
         {
             if (_exitRequested) return;
@@ -62,7 +62,12 @@ public sealed partial class MainWindow : Window
             await _store.SaveAsync(_profiles);
         };
     }
-    private void ShowFromTray() { _appWindow.Show(); Activate(); }
+    internal void ShowAndActivate()
+    {
+        if (_appWindow.Presenter is OverlappedPresenter { State: OverlappedPresenterState.Minimized } presenter)
+            presenter.Restore();
+        _appWindow.Show(); Activate();
+    }
     private void ExitFromTray() { _exitRequested = true; Close(); }
     private void InitializeSetupHeader()
     {
