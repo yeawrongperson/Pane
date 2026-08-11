@@ -17,16 +17,6 @@ public interface IWallpaperTransitionService
 
 public sealed class WallpaperItemException(string message, Exception innerException) : Exception(message, innerException);
 
-public static class ImageCatalog
-{
-    private static readonly HashSet<string> Extensions = new(StringComparer.OrdinalIgnoreCase)
-        { ".jpg", ".jpeg", ".png", ".bmp", ".webp" };
-    public static bool IsSupported(string path) => Extensions.Contains(Path.GetExtension(path));
-    public static IReadOnlyList<string> Scan(string folder) => Directory.Exists(folder)
-        ? Directory.EnumerateFiles(folder).Where(IsSupported).OrderBy(Path.GetFileName, StringComparer.OrdinalIgnoreCase).ToArray()
-        : [];
-}
-
 public sealed class ProfileStore(string settingsPath)
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true, PropertyNameCaseInsensitive = true };
@@ -52,14 +42,30 @@ public sealed class SlideshowSession : IAsyncDisposable
 {
     private readonly MonitorInfo _monitor; private readonly MonitorWallpaperProfile _profile;
     private readonly IWallpaperTransitionService _transition; private readonly Func<TimeSpan, CancellationToken, Task> _delay;
+    private readonly IReadOnlyList<string>? _initialFiles;
     private CancellationTokenSource? _cts; private Task? _worker;
     public SlideshowSession(
         MonitorInfo monitor,
         MonitorWallpaperProfile profile,
         IWallpaperTransitionService transition,
         Func<TimeSpan, CancellationToken, Task>? delay = null)
+        : this(monitor, profile, transition, null, delay) { }
+
+    public SlideshowSession(
+        MonitorInfo monitor,
+        MonitorWallpaperProfile profile,
+        IWallpaperTransitionService transition,
+        IReadOnlyList<string> initialFiles)
+        : this(monitor, profile, transition, initialFiles, null) { }
+
+    private SlideshowSession(
+        MonitorInfo monitor,
+        MonitorWallpaperProfile profile,
+        IWallpaperTransitionService transition,
+        IReadOnlyList<string>? initialFiles,
+        Func<TimeSpan, CancellationToken, Task>? delay)
     {
-        (_monitor, _profile, _transition) = (monitor, profile, transition);
+        (_monitor, _profile, _transition, _initialFiles) = (monitor, profile, transition, initialFiles);
         _delay = delay ?? Task.Delay;
     }
     public event EventHandler<string>? WallpaperChanged;
@@ -84,7 +90,7 @@ public sealed class SlideshowSession : IAsyncDisposable
     }
     private async Task RunAsync(CancellationToken token)
     {
-        var files = ImageCatalog.Scan(_profile.SlideshowFolderPath ?? "");
+        var files = _initialFiles ?? (await ImageCatalog.ScanAsync(_profile.SlideshowFolderPath ?? "", token)).Files;
         if (files.Count == 0) return;
         var order = _profile.ShuffleEnabled ? files.OrderBy(_ => Random.Shared.Next()).ToArray() : files;
         var attempts = 0;

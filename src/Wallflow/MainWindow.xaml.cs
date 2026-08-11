@@ -23,6 +23,7 @@ public sealed partial class MainWindow : Window
     private readonly AppWindow _appWindow;
     private readonly TrayIconService _trayIcon;
     private readonly Dictionary<string, SlideshowSession> _sessions = [];
+    private readonly LatestScanCoordinator<string> _folderScans = new();
     private List<MonitorInfo> _displayList = []; private List<MonitorWallpaperProfile> _profiles = []; private MonitorInfo? _selected;
     private bool _initialized;
     private TextBlock _setupNameText = null!;
@@ -56,6 +57,7 @@ public sealed partial class MainWindow : Window
         RootGrid.AddHandler(UIElement.PointerPressedEvent, new PointerEventHandler(RootGrid_PointerPressed), true);
         Closed += async (_, _) =>
         {
+            _folderScans.Dispose();
             _trayIcon.Dispose();
             foreach (var session in _sessions.Values) session.Stop();
             foreach (var session in _sessions.Values) await session.DisposeAsync();
@@ -171,12 +173,24 @@ public sealed partial class MainWindow : Window
         }
         try { _profiles = await _store.LoadAsync(); } catch { _profiles = []; }
         await RefreshAsync();
-        foreach (var display in _displayList)
+        await Task.WhenAll(_displayList.Select(InitializePersistedSlideshowAsync));
+    }
+    private async Task InitializePersistedSlideshowAsync(MonitorInfo display)
+    {
+        var profile = Profile(display);
+        if (profile.Mode != WallpaperMode.Slideshow || !profile.Enabled) return;
+        var folder = profile.SlideshowFolderPath ?? "";
+        using var operation = _folderScans.Begin(display.Id);
+        try
         {
-            var profile = Profile(display);
-            if (profile.Mode == WallpaperMode.Slideshow && profile.Enabled && ImageCatalog.Scan(profile.SlideshowFolderPath ?? "").Count > 0)
-                await StartSlideshowAsync(display, profile);
+            var result = await ImageCatalog.ScanAsync(folder, operation.Token);
+            if (!operation.IsCurrent || profile.Mode != WallpaperMode.Slideshow || profile.SlideshowFolderPath != folder) return;
+            if (result.IsAvailable && result.Files.Count > 0)
+                await StartSlideshowAsync(display, profile, result.Files);
+            else if (_selected?.Id == display.Id)
+                ShowScanResult(result);
         }
+        catch (OperationCanceledException) when (operation.Token.IsCancellationRequested) { }
     }
     private void MigrateLegacyProfiles()
     {
@@ -187,6 +201,7 @@ public sealed partial class MainWindow : Window
     }
     private async Task RefreshAsync()
     {
+        _folderScans.CancelAll();
         _displayList = (await _monitors.GetMonitorsAsync()).ToList();
         foreach (var display in _displayList)
             if (_profiles.All(p => p.MonitorId != display.Id)) _profiles.Add(new() { MonitorId = display.Id, MonitorDevicePath = display.DeviceName });
@@ -253,7 +268,12 @@ public sealed partial class MainWindow : Window
     {
         ValidationText.Text = "Display identification overlays are planned; refresh and topology detection are active now.";
     }
-    private void ModeToggle_Toggled(object sender, RoutedEventArgs e) { StaticPanel.Visibility = ModeToggle.IsOn ? Visibility.Collapsed : Visibility.Visible; SlideshowPanel.Visibility = ModeToggle.IsOn ? Visibility.Visible : Visibility.Collapsed; }
+    private void ModeToggle_Toggled(object sender, RoutedEventArgs e)
+    {
+        StaticPanel.Visibility = ModeToggle.IsOn ? Visibility.Collapsed : Visibility.Visible;
+        SlideshowPanel.Visibility = ModeToggle.IsOn ? Visibility.Visible : Visibility.Collapsed;
+        if (!ModeToggle.IsOn && _selected is not null) _folderScans.Cancel(_selected.Id);
+    }
     private void FitBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (_selected is null || FitBox.SelectedIndex < 0) return;
@@ -267,23 +287,60 @@ public sealed partial class MainWindow : Window
     }
     private async void ChooseFolder_Click(object sender, RoutedEventArgs e)
     {
-        if (_selected is null) return; var picker = new FolderPicker(); InitializeWithWindow.Initialize(picker, WindowNative.GetWindowHandle(this)); picker.FileTypeFilter.Add("*"); var folder = await picker.PickSingleFolderAsync(); if (folder is null) return; Profile(_selected).SlideshowFolderPath = folder.Path; FolderPathText.Text = folder.Path; ValidationText.Text = $"{ImageCatalog.Scan(folder.Path).Count} supported images";
+        if (_selected is null) return;
+        var monitor = _selected;
+        var picker = new FolderPicker(); InitializeWithWindow.Initialize(picker, WindowNative.GetWindowHandle(this)); picker.FileTypeFilter.Add("*");
+        var folder = await picker.PickSingleFolderAsync();
+        if (folder is null) return;
+        var profile = Profile(monitor); profile.SlideshowFolderPath = folder.Path;
+        if (_selected?.Id == monitor.Id) { FolderPathText.Text = folder.Path; ValidationText.Text = "Scanning folder…"; }
+        using var operation = _folderScans.Begin(monitor.Id);
+        try
+        {
+            var result = await ImageCatalog.ScanAsync(folder.Path, operation.Token);
+            if (!operation.IsCurrent || profile.SlideshowFolderPath != folder.Path || _selected?.Id != monitor.Id) return;
+            ShowScanResult(result);
+        }
+        catch (OperationCanceledException) when (operation.Token.IsCancellationRequested) { }
     }
     private async void Apply_Click(object sender, RoutedEventArgs e)
     {
-        if (_selected is null) return; var profile = Profile(_selected); profile.Mode = ModeToggle.IsOn ? WallpaperMode.Slideshow : WallpaperMode.Static; profile.ShuffleEnabled = ShuffleToggle.IsOn; profile.LoopEnabled = LoopToggle.IsOn; profile.FitMode = (WallpaperFit)Math.Max(0, FitBox.SelectedIndex);
+        if (_selected is null) return; var monitor = _selected; var profile = Profile(monitor); profile.Mode = ModeToggle.IsOn ? WallpaperMode.Slideshow : WallpaperMode.Static; profile.ShuffleEnabled = ShuffleToggle.IsOn; profile.LoopEnabled = LoopToggle.IsOn; profile.FitMode = (WallpaperFit)Math.Max(0, FitBox.SelectedIndex);
         try
         {
-            if (profile.Mode == WallpaperMode.Static) { if (!File.Exists(profile.StaticImagePath) || !ImageCatalog.IsSupported(profile.StaticImagePath!)) { ValidationText.Text = "Choose a supported wallpaper image first."; return; } await _wallpaper.SetWallpaperAsync(_selected.Id, profile.StaticImagePath!, profile.FitMode); profile.LastWallpaperPath = profile.StaticImagePath; }
-            else { var files = ImageCatalog.Scan(profile.SlideshowFolderPath ?? ""); if (files.Count == 0) { ValidationText.Text = "This folder doesn't contain any supported images."; return; } if (IntervalBox.SelectedItem is ComboBoxItem item && int.TryParse(item.Tag?.ToString(), out var minutes)) profile.SlideshowInterval = TimeSpan.FromMinutes(minutes); await StartSlideshowAsync(_selected, profile); }
+            if (profile.Mode == WallpaperMode.Static)
+            {
+                _folderScans.Cancel(monitor.Id);
+                if (!File.Exists(profile.StaticImagePath) || !ImageCatalog.IsSupported(profile.StaticImagePath!)) { ValidationText.Text = "Choose a supported wallpaper image first."; return; }
+                await _wallpaper.SetWallpaperAsync(monitor.Id, profile.StaticImagePath!, profile.FitMode); profile.LastWallpaperPath = profile.StaticImagePath;
+            }
+            else
+            {
+                var folder = profile.SlideshowFolderPath ?? "";
+                using var operation = _folderScans.Begin(monitor.Id);
+                ValidationText.Text = "Scanning folder…";
+                var result = await ImageCatalog.ScanAsync(folder, operation.Token);
+                if (!operation.IsCurrent || profile.Mode != WallpaperMode.Slideshow || profile.SlideshowFolderPath != folder) return;
+                if (!result.IsAvailable || result.Files.Count == 0) { ShowScanResult(result); return; }
+                if (IntervalBox.SelectedItem is ComboBoxItem item && int.TryParse(item.Tag?.ToString(), out var minutes)) profile.SlideshowInterval = TimeSpan.FromMinutes(minutes);
+                await StartSlideshowAsync(monitor, profile, result.Files);
+            }
             await _store.SaveAsync(_profiles); ValidationText.Foreground = new SolidColorBrush(ColorHelper.FromArgb(255, 116, 221, 164)); ValidationText.Text = profile.Mode == WallpaperMode.Static ? "Wallpaper applied" : "Slideshow started"; SetupSummary.Text = $"{_displayList.Count} displays • {_profiles.Count(p => p.Mode == WallpaperMode.Slideshow && p.Enabled)} slideshows configured"; RenderMonitors();
         }
+        catch (OperationCanceledException) { }
         catch (Exception ex) { ValidationText.Foreground = new SolidColorBrush(ColorHelper.FromArgb(255, 255, 123, 134)); ValidationText.Text = ex.Message; }
     }
-    private async Task StartSlideshowAsync(MonitorInfo monitor, MonitorWallpaperProfile profile)
+    private void ShowScanResult(ImageCatalogScanResult result)
+    {
+        ValidationText.Foreground = new SolidColorBrush(result.IsAvailable ? ColorHelper.FromArgb(255, 183, 190, 209) : ColorHelper.FromArgb(255, 255, 123, 134));
+        ValidationText.Text = result.Failure?.Message ?? (result.Files.Count == 0
+            ? "This folder doesn't contain any supported images."
+            : result.WasTruncated ? $"{result.Files.Count:N0} supported images (folder limit reached)" : $"{result.Files.Count:N0} supported images");
+    }
+    private async Task StartSlideshowAsync(MonitorInfo monitor, MonitorWallpaperProfile profile, IReadOnlyList<string> files)
     {
         if (_sessions.Remove(monitor.Id, out var old)) await old.DisposeAsync();
-        var session = new SlideshowSession(monitor, profile, new WallpaperTransitionService(_wallpaper));
+        var session = new SlideshowSession(monitor, profile, new WallpaperTransitionService(_wallpaper), files);
         session.WallpaperChanged += (_, path) => DispatcherQueue.TryEnqueue(() => { if (_selected?.Id == monitor.Id) SetPreview(path); RenderMonitors(); });
         _sessions[monitor.Id] = session; session.Start();
     }
