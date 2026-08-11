@@ -12,4 +12,8 @@
     <FileVersion>0.1.0.0</FileVersion>
     <InformationalVersion>$(Version)</InformationalVersion>
   </PropertyGroup>
+  <PropertyGroup Condition="'$(PaneOfficialReleaseBuild)' == 'true'">
+    <ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
+    <PathMap>$(MSBuildThisFileDirectory)=/_/Pane/</PathMap>
+  </PropertyGroup>
 </Project>

@@ -66,6 +66,49 @@ function Get-PeMachine([string]$Path) {
     }
 }
 
+function Test-FileContainsTextMarker([string]$Path, [string]$Marker) {
+    if ([string]::IsNullOrEmpty($Marker)) { return $false }
+
+    $latin1 = [System.Text.Encoding]::GetEncoding(28591)
+    $utf8 = [System.Text.UTF8Encoding]::new($false)
+    $patterns = @(
+        $latin1.GetString($utf8.GetBytes($Marker)),
+        $latin1.GetString([System.Text.Encoding]::Unicode.GetBytes($Marker))
+    )
+    $maximumPatternLength = ($patterns | Measure-Object -Property Length -Maximum).Maximum
+    $buffer = [byte[]]::new(1MB)
+    $tail = ''
+    $stream = [System.IO.File]::OpenRead($Path)
+    try {
+        while (($read = $stream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+            $chunk = $tail + $latin1.GetString($buffer, 0, $read)
+            foreach ($pattern in $patterns) {
+                if ($chunk.IndexOf($pattern, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) { return $true }
+            }
+            $tailLength = [Math]::Min($maximumPatternLength - 1, $chunk.Length)
+            $tail = if ($tailLength -gt 0) { $chunk.Substring($chunk.Length - $tailLength) } else { '' }
+        }
+        return $false
+    }
+    finally { $stream.Dispose() }
+}
+
+function Assert-NoPrivateBuildPaths([string]$ExecutablePath, [string]$RepositoryRoot) {
+    $userProfile = [Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile)
+    $markers = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($marker in @($RepositoryRoot, $userProfile, 'C:\Users\', 'Documents\ChatGPT\Pane')) {
+        if ([string]::IsNullOrWhiteSpace($marker)) { continue }
+        [void]$markers.Add($marker.TrimEnd('\', '/'))
+        [void]$markers.Add($marker.Replace('\', '/').TrimEnd('/'))
+    }
+
+    foreach ($marker in $markers) {
+        if (Test-FileContainsTextMarker $ExecutablePath $marker) {
+            throw "Private developer-machine path marker found in Pane.exe: $marker"
+        }
+    }
+}
+
 function Test-EmbeddedIcon([string]$ExecutablePath, [string]$IconPath) {
     Add-Type -AssemblyName System.Drawing
     $executableIcon = [System.Drawing.Icon]::ExtractAssociatedIcon($ExecutablePath)
@@ -140,11 +183,11 @@ try {
     $env:DOTNET_CLI_HOME = Join-Path $repoRoot '.dotnet-home'
     $env:DOTNET_SKIP_FIRST_TIME_EXPERIENCE = '1'
 
-    Invoke-Native $dotnet @('restore', $solution)
-    Invoke-Native $dotnet @('restore', $appProject, '-r', 'win-x64', '-p:SelfContained=true', '-p:WindowsAppSDKSelfContained=true', '-p:PublishSingleFile=true', '-p:IncludeAllContentForSelfExtract=true', '-p:EnableMsixTooling=true')
-    Invoke-Native $msbuild @($solution, '/restore:false', '/p:Configuration=Release', '/p:Platform=x64', "/p:Version=$Version", "/p:AssemblyVersion=$numericVersion", "/p:FileVersion=$numericVersion", "/p:InformationalVersion=$Version", '/v:minimal')
+    Invoke-Native $dotnet @('restore', $solution, '-p:PaneOfficialReleaseBuild=true')
+    Invoke-Native $dotnet @('restore', $appProject, '-r', 'win-x64', '-p:PaneOfficialReleaseBuild=true', '-p:SelfContained=true', '-p:WindowsAppSDKSelfContained=true', '-p:PublishSingleFile=true', '-p:IncludeAllContentForSelfExtract=true', '-p:EnableMsixTooling=true')
+    Invoke-Native $msbuild @($solution, '/restore:false', '/p:Configuration=Release', '/p:Platform=x64', '/p:PaneOfficialReleaseBuild=true', "/p:Version=$Version", "/p:AssemblyVersion=$numericVersion", "/p:FileVersion=$numericVersion", "/p:InformationalVersion=$Version", '/v:minimal')
     Invoke-Native $dotnet @('test', $testProject, '-c', 'Release', '--no-build', '--no-restore', '-p:Platform=x64')
-    Invoke-Native $msbuild @($appProject, '/t:Publish', '/restore:false', '/p:Configuration=Release', '/p:Platform=x64', '/p:PublishProfile=win-x64', "/p:PublishDir=$publishDirectory\", "/p:Version=$Version", "/p:AssemblyVersion=$numericVersion", "/p:FileVersion=$numericVersion", "/p:InformationalVersion=$Version", '/v:minimal')
+    Invoke-Native $msbuild @($appProject, '/t:Publish', '/restore:false', '/p:Configuration=Release', '/p:Platform=x64', '/p:PaneOfficialReleaseBuild=true', '/p:PublishProfile=win-x64', "/p:PublishDir=$publishDirectory\", "/p:Version=$Version", "/p:AssemblyVersion=$numericVersion", "/p:FileVersion=$numericVersion", "/p:InformationalVersion=$Version", '/v:minimal')
 
     $publishedExe = Join-Path $publishDirectory 'Pane.exe'
     if (-not (Test-Path -LiteralPath $publishedExe)) { throw "Publish did not produce Pane.exe at $publishedExe" }
@@ -173,6 +216,7 @@ try {
         throw "Pane.exe metadata is incorrect (Product='$($versionInfo.ProductName)', Description='$($versionInfo.FileDescription)')."
     }
     if ((Get-PeMachine $releaseExe) -ne 0x8664) { throw 'Pane.exe is not an x64 executable.' }
+    Assert-NoPrivateBuildPaths $releaseExe $repoRoot
     $paneIcon = Join-Path $repoRoot 'src\Wallflow\Assets\Pane.ico'
     if (-not (Test-EmbeddedIcon $releaseExe $paneIcon)) { throw 'Pane.exe does not contain the expected Pane icon.' }
 
