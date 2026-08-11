@@ -15,8 +15,8 @@
 
             <Style x:Key="JellyButtonStyle" TargetType="Button">
                 <Setter Property="Foreground" Value="#F4FFFFFF"/>
-                <Setter Property="Background" Value="#D922252D"/>
-                <Setter Property="BorderBrush" Value="#24FFFFFF"/>
+                <Setter Property="Background" Value="#E01D2027"/>
+                <Setter Property="BorderBrush" Value="#16FFFFFF"/>
                 <Setter Property="BorderThickness" Value="1"/>
                 <Setter Property="CornerRadius" Value="11"/>
                 <Setter Property="Padding" Value="14,8"/>
@@ -29,26 +29,19 @@
                             <Grid x:Name="JellyRoot" RenderTransformOrigin="0.5,0.5">
                                 <Grid.RenderTransform><CompositeTransform x:Name="JellyTransform"/></Grid.RenderTransform>
                                 <Border x:Name="JellySurface" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="{TemplateBinding CornerRadius}">
-                                    <Grid>
-                                        <Border Height="1" Margin="10,1,10,0" VerticalAlignment="Top" CornerRadius="1" Background="#45FFFFFF"/>
-                                        <Border Margin="1" CornerRadius="10" BorderBrush="#0EFFFFFF" BorderThickness="1"/>
-                                        <ContentPresenter Content="{TemplateBinding Content}" ContentTemplate="{TemplateBinding ContentTemplate}" Margin="{TemplateBinding Padding}" HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalAlignment="{TemplateBinding VerticalContentAlignment}"/>
-                                    </Grid>
+                                    <ContentPresenter Content="{TemplateBinding Content}" ContentTemplate="{TemplateBinding ContentTemplate}" Margin="{TemplateBinding Padding}" HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalAlignment="{TemplateBinding VerticalContentAlignment}"/>
                                 </Border>
                                 <VisualStateManager.VisualStateGroups>
                                     <VisualStateGroup x:Name="CommonStates">
                                         <VisualState x:Name="Normal"/>
                                         <VisualState x:Name="PointerOver">
                                             <Storyboard>
-                                                <ColorAnimation Storyboard.TargetName="JellySurface" Storyboard.TargetProperty="(Border.Background).(SolidColorBrush.Color)" To="#F02B303B" Duration="0:0:0.14"/>
-                                                <DoubleAnimation Storyboard.TargetName="JellyTransform" Storyboard.TargetProperty="TranslateY" To="-1" Duration="0:0:0.14"/>
+                                                <ColorAnimation Storyboard.TargetName="JellySurface" Storyboard.TargetProperty="(Border.Background).(SolidColorBrush.Color)" To="#F0252831" Duration="0:0:0.14"/>
                                             </Storyboard>
                                         </VisualState>
                                         <VisualState x:Name="Pressed">
                                             <Storyboard>
-                                                <ColorAnimation Storyboard.TargetName="JellySurface" Storyboard.TargetProperty="(Border.Background).(SolidColorBrush.Color)" To="#FF191C23" Duration="0:0:0.08"/>
-                                                <DoubleAnimation Storyboard.TargetName="JellyTransform" Storyboard.TargetProperty="ScaleX" To="0.975" Duration="0:0:0.08"/>
-                                                <DoubleAnimation Storyboard.TargetName="JellyTransform" Storyboard.TargetProperty="ScaleY" To="0.975" Duration="0:0:0.08"/>
+                                                <ColorAnimation Storyboard.TargetName="JellySurface" Storyboard.TargetProperty="(Border.Background).(SolidColorBrush.Color)" To="#FF171A20" Duration="0:0:0.08"/>
                                             </Storyboard>
                                         </VisualState>
                                         <VisualState x:Name="Disabled"><VisualState.Setters><Setter Target="JellyRoot.Opacity" Value="0.42"/></VisualState.Setters></VisualState>
@@ -62,10 +55,38 @@
 
             <Style TargetType="Button" BasedOn="{StaticResource JellyButtonStyle}"/>
 
-            <Style x:Key="JellyAccentButtonStyle" TargetType="Button" BasedOn="{StaticResource JellyButtonStyle}">
-                <Setter Property="Background" Value="#E16F7FF5"/>
-                <Setter Property="BorderBrush" Value="#6FFFFFFF"/>
+            <Style x:Key="JellyAccentButtonStyle" TargetType="Button">
+                <Setter Property="Background" Value="#F06E7EF0"/>
+                <Setter Property="BorderBrush" Value="#287C8CFF"/>
+                <Setter Property="BorderThickness" Value="1"/>
+                <Setter Property="CornerRadius" Value="11"/>
                 <Setter Property="Foreground" Value="White"/>
+                <Setter Property="Padding" Value="14,8"/>
+                <Setter Property="FontWeight" Value="SemiBold"/>
+                <Setter Property="HorizontalContentAlignment" Value="Center"/>
+                <Setter Property="VerticalContentAlignment" Value="Center"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="Button">
+                            <Grid x:Name="AccentRoot">
+                                <Border x:Name="AccentSurface" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="{TemplateBinding CornerRadius}">
+                                    <ContentPresenter Content="{TemplateBinding Content}" ContentTemplate="{TemplateBinding ContentTemplate}" Margin="{TemplateBinding Padding}" HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalAlignment="{TemplateBinding VerticalContentAlignment}"/>
+                                </Border>
+                                <VisualStateManager.VisualStateGroups>
+                                    <VisualStateGroup x:Name="CommonStates">
+                                        <VisualStateGroup.Transitions><VisualTransition GeneratedDuration="0:0:0.14"/></VisualStateGroup.Transitions>
+                                        <VisualState x:Name="Normal"/>
+                                        <VisualState x:Name="PointerOver"><VisualState.Setters><Setter Target="AccentSurface.Background" Value="#FF7989FA"/></VisualState.Setters></VisualState>
+                                        <VisualState x:Name="Pressed">
+                                            <VisualState.Setters><Setter Target="AccentSurface.Background" Value="#FF5F6DD8"/></VisualState.Setters>
+                                        </VisualState>
+                                        <VisualState x:Name="Disabled"><VisualState.Setters><Setter Target="AccentRoot.Opacity" Value="0.42"/></VisualState.Setters></VisualState>
+                                    </VisualStateGroup>
+                                </VisualStateManager.VisualStateGroups>
+                            </Grid>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
             </Style>
 
             <Style x:Key="JellyIconButtonStyle" TargetType="Button" BasedOn="{StaticResource JellyButtonStyle}">
@@ -73,9 +94,136 @@
                 <Setter Property="Height" Value="32"/>
                 <Setter Property="Padding" Value="0"/>
                 <Setter Property="CornerRadius" Value="16"/>
-                <Setter Property="Background" Value="#A32A2E3A"/>
-                <Setter Property="BorderBrush" Value="#367C8CFF"/>
-                <Setter Property="Foreground" Value="#FF9CA8FF"/>
+                <Setter Property="Background" Value="#D921242C"/>
+                <Setter Property="BorderBrush" Value="#14FFFFFF"/>
+                <Setter Property="Foreground" Value="#D9FFFFFF"/>
+            </Style>
+
+            <SolidColorBrush x:Key="SetupCardBackgroundBrush" Color="#D91B1D24"/>
+            <SolidColorBrush x:Key="SetupActiveCardBackgroundBrush" Color="#E0232634"/>
+
+            <Style x:Key="SetupHeaderButtonStyle" TargetType="Button">
+                <Setter Property="Foreground" Value="#F4FFFFFF"/>
+                <Setter Property="Background" Value="#00FFFFFF"/>
+                <Setter Property="BorderThickness" Value="0"/>
+                <Setter Property="CornerRadius" Value="11"/>
+                <Setter Property="Padding" Value="4,2,7,3"/>
+                <Setter Property="HorizontalContentAlignment" Value="Left"/>
+                <Setter Property="VerticalContentAlignment" Value="Center"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="Button">
+                            <Grid x:Name="SetupHeaderRoot" RenderTransformOrigin="0.5,0.5">
+                                <Grid.RenderTransform><CompositeTransform x:Name="SetupHeaderTransform"/></Grid.RenderTransform>
+                                <Border x:Name="SetupHeaderSurface" Background="{TemplateBinding Background}" CornerRadius="{TemplateBinding CornerRadius}">
+                                    <ContentPresenter Content="{TemplateBinding Content}" ContentTemplate="{TemplateBinding ContentTemplate}" Margin="{TemplateBinding Padding}" HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalAlignment="{TemplateBinding VerticalContentAlignment}"/>
+                                </Border>
+                                <VisualStateManager.VisualStateGroups>
+                                    <VisualStateGroup x:Name="CommonStates">
+                                        <VisualStateGroup.Transitions><VisualTransition GeneratedDuration="0:0:0.14"/></VisualStateGroup.Transitions>
+                                        <VisualState x:Name="Normal"/>
+                                        <VisualState x:Name="PointerOver">
+                                            <Storyboard>
+                                                <ColorAnimation Storyboard.TargetName="SetupHeaderSurface" Storyboard.TargetProperty="(Border.Background).(SolidColorBrush.Color)" To="#18FFFFFF" Duration="0:0:0.14"/>
+                                            </Storyboard>
+                                        </VisualState>
+                                        <VisualState x:Name="Pressed">
+                                            <Storyboard>
+                                                <ColorAnimation Storyboard.TargetName="SetupHeaderSurface" Storyboard.TargetProperty="(Border.Background).(SolidColorBrush.Color)" To="#2AFFFFFF" Duration="0:0:0.08"/>
+                                            </Storyboard>
+                                        </VisualState>
+                                        <VisualState x:Name="Disabled"><VisualState.Setters><Setter Target="SetupHeaderRoot.Opacity" Value="0.45"/></VisualState.Setters></VisualState>
+                                    </VisualStateGroup>
+                                </VisualStateManager.VisualStateGroups>
+                            </Grid>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+
+            <Style x:Key="SetupCardStyle" TargetType="Button">
+                <Setter Property="Foreground" Value="#F4FFFFFF"/>
+                <Setter Property="Background" Value="{StaticResource SetupCardBackgroundBrush}"/>
+                <Setter Property="BorderThickness" Value="0"/>
+                <Setter Property="CornerRadius" Value="16"/>
+                <Setter Property="Padding" Value="14,12"/>
+                <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                <Setter Property="VerticalContentAlignment" Value="Center"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="Button">
+                            <Grid x:Name="SetupCardRoot" RenderTransformOrigin="0.5,0.5">
+                                <Grid.RenderTransform><CompositeTransform x:Name="SetupCardTransform"/></Grid.RenderTransform>
+                                <Border x:Name="SetupCardSurface" Background="{TemplateBinding Background}" CornerRadius="{TemplateBinding CornerRadius}">
+                                    <ContentPresenter Content="{TemplateBinding Content}" ContentTemplate="{TemplateBinding ContentTemplate}" Margin="{TemplateBinding Padding}" HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalAlignment="{TemplateBinding VerticalContentAlignment}"/>
+                                </Border>
+                                <VisualStateManager.VisualStateGroups>
+                                    <VisualStateGroup x:Name="CommonStates">
+                                        <VisualStateGroup.Transitions><VisualTransition GeneratedDuration="0:0:0.14"/></VisualStateGroup.Transitions>
+                                        <VisualState x:Name="Normal"/>
+                                        <VisualState x:Name="PointerOver"><VisualState.Setters><Setter Target="SetupCardSurface.Background" Value="#E8282B35"/></VisualState.Setters></VisualState>
+                                        <VisualState x:Name="Pressed">
+                                            <VisualState.Setters><Setter Target="SetupCardSurface.Background" Value="#EF20232C"/></VisualState.Setters>
+                                        </VisualState>
+                                        <VisualState x:Name="Disabled"><VisualState.Setters><Setter Target="SetupCardRoot.Opacity" Value="0.45"/></VisualState.Setters></VisualState>
+                                    </VisualStateGroup>
+                                </VisualStateManager.VisualStateGroups>
+                            </Grid>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+
+            <Style x:Key="SetupMoreButtonStyle" TargetType="Button">
+                <Setter Property="Width" Value="34"/>
+                <Setter Property="Height" Value="34"/>
+                <Setter Property="Padding" Value="0"/>
+                <Setter Property="CornerRadius" Value="17"/>
+                <Setter Property="Background" Value="#AE242730"/>
+                <Setter Property="BorderBrush" Value="#12FFFFFF"/>
+                <Setter Property="BorderThickness" Value="1"/>
+                <Setter Property="Foreground" Value="#D9FFFFFF"/>
+                <Setter Property="HorizontalContentAlignment" Value="Center"/>
+                <Setter Property="VerticalContentAlignment" Value="Center"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="Button">
+                            <Grid x:Name="MoreRoot" RenderTransformOrigin="0.5,0.5">
+                                <Grid.RenderTransform><CompositeTransform x:Name="MoreTransform"/></Grid.RenderTransform>
+                                <Border x:Name="MoreSurface" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="{TemplateBinding CornerRadius}">
+                                    <ContentPresenter Content="{TemplateBinding Content}" ContentTemplate="{TemplateBinding ContentTemplate}" HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalAlignment="{TemplateBinding VerticalContentAlignment}"/>
+                                </Border>
+                                <VisualStateManager.VisualStateGroups>
+                                    <VisualStateGroup x:Name="CommonStates">
+                                        <VisualStateGroup.Transitions><VisualTransition GeneratedDuration="0:0:0.14"/></VisualStateGroup.Transitions>
+                                        <VisualState x:Name="Normal"/>
+                                        <VisualState x:Name="PointerOver"><VisualState.Setters><Setter Target="MoreSurface.Background" Value="#D92C303A"/></VisualState.Setters></VisualState>
+                                        <VisualState x:Name="Pressed">
+                                            <VisualState.Setters><Setter Target="MoreSurface.Background" Value="#F01B1E25"/></VisualState.Setters>
+                                        </VisualState>
+                                        <VisualState x:Name="Disabled"><VisualState.Setters><Setter Target="MoreRoot.Opacity" Value="0.42"/></VisualState.Setters></VisualState>
+                                    </VisualStateGroup>
+                                </VisualStateManager.VisualStateGroups>
+                            </Grid>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+
+            <Style x:Key="SetupStatusActionButtonStyle" TargetType="Button" BasedOn="{StaticResource SetupHeaderButtonStyle}">
+                <Setter Property="Foreground" Value="#FFABB4FF"/>
+                <Setter Property="FontWeight" Value="SemiBold"/>
+                <Setter Property="Padding" Value="10,5"/>
+            </Style>
+
+            <Style x:Key="FloatingStatusStyle" TargetType="Border">
+                <Setter Property="Background" Value="#F224272F"/>
+                <Setter Property="BorderThickness" Value="0"/>
+                <Setter Property="CornerRadius" Value="16"/>
+                <Setter Property="Padding" Value="16,9,8,9"/>
+                <Setter Property="Shadow">
+                    <Setter.Value><ThemeShadow/></Setter.Value>
+                </Setter>
             </Style>
 
             <Style x:Key="JellyTextBoxStyle" TargetType="TextBox">

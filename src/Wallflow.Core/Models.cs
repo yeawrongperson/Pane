@@ -16,6 +16,10 @@ public sealed class MonitorWallpaperProfile
 {
     public required string MonitorId { get; set; }
     public string? MonitorDevicePath { get; set; }
+    public int DisplayX { get; set; }
+    public int DisplayY { get; set; }
+    public int DisplayWidth { get; set; }
+    public int DisplayHeight { get; set; }
     public WallpaperMode Mode { get; set; } = WallpaperMode.Static;
     public string? StaticImagePath { get; set; }
     public string? SlideshowFolderPath { get; set; }
