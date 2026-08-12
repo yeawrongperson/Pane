@@ -253,20 +253,11 @@ public sealed partial class MainWindow : Window
         var setup = Setups.ActiveSetup;
         ActiveSetupName.Text = setup.Name;
         AutomationProperties.SetName(SetupSwitcherButton, $"Open setups. Active setup: {setup.Name}");
-        var connected = CountConnectedDisplays(setup);
-        var saved = setup.MonitorProfiles.Count;
+        var inventory = Setups.AnalyzeMonitorProfiles(setup.Id, _displayList);
         var slideshows = setup.MonitorProfiles.Count(profile => profile.Mode == WallpaperMode.Slideshow && profile.Enabled);
-        var displayText = saved > connected
-            ? $"{connected} of {saved} displays connected"
-            : $"{connected} {(connected == 1 ? "display" : "displays")}";
+        var displayText = SetupConnectionSummaryFormatter.Format(inventory);
         SetupSummary.Text = $"{displayText} · {slideshows} {(slideshows == 1 ? "slideshow" : "slideshows")} configured";
     }
-
-    private int CountConnectedDisplays(WallpaperSetup setup)
-        => _displayList.Count(display => setup.MonitorProfiles.Any(profile =>
-            string.Equals(profile.MonitorId, display.Id, StringComparison.OrdinalIgnoreCase) ||
-            (!string.IsNullOrWhiteSpace(profile.MonitorDevicePath) &&
-             string.Equals(profile.MonitorDevicePath, display.DeviceName, StringComparison.OrdinalIgnoreCase))));
 
     private void SetupSwitcherButton_Click(object sender, RoutedEventArgs e)
     {
@@ -474,14 +465,12 @@ public sealed partial class MainWindow : Window
     private FrameworkElement CreateSetupCard(WallpaperSetup setup)
     {
         var isActive = setup.Id == Setups.State.ActiveSetupId;
-        var connected = CountConnectedDisplays(setup);
-        var saved = setup.MonitorProfiles.Count;
+        var inventory = Setups.AnalyzeMonitorProfiles(setup.Id, _displayList);
         var slideshows = setup.MonitorProfiles.Count(profile => profile.Mode == WallpaperMode.Slideshow && profile.Enabled);
-        var summary = connected < saved
-            ? $"{connected} of {saved} displays connected"
-            : slideshows == 0
-                ? $"{saved} {(saved == 1 ? "display" : "displays")} · static"
-                : $"{saved} {(saved == 1 ? "display" : "displays")} · {slideshows} {(slideshows == 1 ? "slideshow" : "slideshows")}";
+        var connectionSummary = SetupConnectionSummaryFormatter.Format(inventory);
+        var summary = slideshows == 0
+            ? $"{connectionSummary} · static"
+            : $"{connectionSummary} · {slideshows} {(slideshows == 1 ? "slideshow" : "slideshows")}";
 
         var content = new Grid { ColumnSpacing = 13, Margin = new Thickness(0, 0, 34, 0) };
         content.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(122) });
@@ -530,10 +519,22 @@ public sealed partial class MainWindow : Window
         rename.Click += async (_, _) => await BeginSetupNameEditAsync(setup.Id);
         var duplicate = new MenuFlyoutItem { Text = "Duplicate", Icon = new SymbolIcon(Symbol.Copy) };
         duplicate.Click += async (_, _) => await DuplicateSetupAsync(setup.Id);
+        var manageDisplays = new MenuFlyoutItem { Text = "Manage displays…", Icon = new SymbolIcon(Symbol.Setting) };
+        manageDisplays.Click += async (_, _) => await ManageSetupDisplaysAsync(setup.Id);
+        var removeDisconnected = new MenuFlyoutItem
+        {
+            Text = $"Remove disconnected displays ({inventory.DisconnectedDisplayCount})",
+            Icon = new SymbolIcon(Symbol.Remove),
+            IsEnabled = inventory.DisconnectedDisplayCount > 0
+        };
+        removeDisconnected.Click += async (_, _) => await RemoveDisconnectedDisplaysAsync(setup.Id, inventory.DisconnectedDisplayCount);
         var delete = new MenuFlyoutItem { Text = "Delete", Icon = new SymbolIcon(Symbol.Delete), IsEnabled = Setups.State.Setups.Count > 1 };
         delete.Click += async (_, _) => await DeleteSetupAsync(setup.Id);
         menu.Items.Add(rename);
         menu.Items.Add(duplicate);
+        menu.Items.Add(new MenuFlyoutSeparator());
+        menu.Items.Add(manageDisplays);
+        menu.Items.Add(removeDisconnected);
         menu.Items.Add(new MenuFlyoutSeparator());
         menu.Items.Add(delete);
         more.Flyout = menu;
@@ -578,6 +579,7 @@ public sealed partial class MainWindow : Window
         var canvas = new Canvas { Width = canvasWidth, Height = canvasHeight, VerticalAlignment = VerticalAlignment.Center,
             Clip = new RectangleGeometry { Rect = new Windows.Foundation.Rect(0, 0, canvasWidth, canvasHeight) } };
         var profiles = setup.MonitorProfiles.Take(visibleLimit).ToArray();
+        var inventory = Setups.AnalyzeMonitorProfiles(setup.Id, _displayList);
         if (profiles.Length == 0)
         {
             canvas.Children.Add(new Border { Width = 42, Height = 25, CornerRadius = new CornerRadius(4), Background = CreateTopologyGradient(), BorderBrush = (Brush)Application.Current.Resources["BorderBrush"], BorderThickness = new Thickness(1) });
@@ -588,9 +590,7 @@ public sealed partial class MainWindow : Window
 
         var entries = profiles.Select((profile, index) =>
         {
-            var live = _displayList.FirstOrDefault(display =>
-                string.Equals(display.Id, profile.MonitorId, StringComparison.OrdinalIgnoreCase) ||
-                (!string.IsNullOrWhiteSpace(profile.MonitorDevicePath) && string.Equals(display.DeviceName, profile.MonitorDevicePath, StringComparison.OrdinalIgnoreCase)));
+            var live = inventory.Profiles.First(status => ReferenceEquals(status.Profile, profile)).Monitor;
             var descriptor = live is null ? SavedMonitorVisualResolver.Resolve(profile, Setups.State.MonitorVisualPreferences)
                 : Setups.GetMonitorVisualDescriptor(live, _displayList);
             return new { Profile = profile, Live = live, Descriptor = descriptor, Key = $"{index}:{profile.MonitorId}" };
@@ -809,6 +809,189 @@ public sealed partial class MainWindow : Window
         await SaveSetupStateAsync();
         RenderSetupCards();
         ShowSetupStatus($"{duplicate.Name} created", showUndo: false);
+    }
+
+    private async Task ManageSetupDisplaysAsync(string setupId)
+    {
+        if (_setupManager is null || !Setups.State.Setups.Any(setup => setup.Id == setupId)) return;
+        CloseSetupPanel();
+        var setup = Setups.Find(setupId);
+        var inventory = Setups.AnalyzeMonitorProfiles(setupId, _displayList);
+        string? requestedRemovalId = null;
+        ContentDialog? dialog = null;
+        var rows = new StackPanel { Spacing = 8 };
+        if (inventory.SavedDisplayCount == 0)
+        {
+            rows.Children.Add(new TextBlock
+            {
+                Text = "No saved displays",
+                Foreground = (Brush)Application.Current.Resources["SecondaryTextBrush"]
+            });
+        }
+        else
+        {
+            foreach (var status in inventory.Profiles)
+            {
+                var row = new Grid
+                {
+                    ColumnSpacing = 12,
+                    Padding = new Thickness(12, 10, 12, 10),
+                    Background = (Brush)Application.Current.Resources["SetupCardBackgroundBrush"]
+                };
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                var label = new TextBlock
+                {
+                    Text = SavedDisplayLabel(status.Profile),
+                    TextTrimming = TextTrimming.CharacterEllipsis,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    MaxWidth = 220
+                };
+                row.Children.Add(label);
+                var state = new TextBlock
+                {
+                    Text = status.Connection switch
+                    {
+                        SetupMonitorProfileConnection.Connected => "Connected",
+                        SetupMonitorProfileConnection.Disconnected => "Disconnected",
+                        _ => "Connection uncertain"
+                    },
+                    Foreground = (Brush)Application.Current.Resources["SecondaryTextBrush"],
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+                Grid.SetColumn(state, 1);
+                row.Children.Add(state);
+                if (status.Connection == SetupMonitorProfileConnection.Disconnected)
+                {
+                    var monitorId = status.Profile.MonitorId;
+                    var remove = new Button { Content = "Remove", VerticalAlignment = VerticalAlignment.Center };
+                    remove.Click += (_, _) =>
+                    {
+                        requestedRemovalId = monitorId;
+                        dialog?.Hide();
+                    };
+                    Grid.SetColumn(remove, 2);
+                    row.Children.Add(remove);
+                }
+                rows.Children.Add(row);
+            }
+        }
+
+        dialog = new ContentDialog
+        {
+            XamlRoot = RootGrid.XamlRoot,
+            Title = $"Displays in {setup.Name}",
+            Content = new ScrollViewer { Content = rows, MaxHeight = 360, VerticalScrollBarVisibility = ScrollBarVisibility.Auto },
+            CloseButtonText = "Done"
+        };
+        await dialog.ShowAsync();
+        if (requestedRemovalId is null) return;
+        if (await ConfirmRemoveDisconnectedDisplayAsync(setupId, requestedRemovalId))
+            await ManageSetupDisplaysAsync(setupId);
+    }
+
+    private string SavedDisplayLabel(MonitorWallpaperProfile profile)
+    {
+        var alias = Setups.State.MonitorAliases.FirstOrDefault(candidate =>
+            string.Equals(candidate.MonitorId, profile.MonitorId, StringComparison.OrdinalIgnoreCase));
+        if (!string.IsNullOrWhiteSpace(alias?.Name)) return alias.Name;
+        var preference = Setups.State.MonitorVisualPreferences.FirstOrDefault(candidate =>
+            string.Equals(candidate.MonitorId, profile.MonitorId, StringComparison.OrdinalIgnoreCase));
+        if (!string.IsNullOrWhiteSpace(preference?.LastKnownModelName)) return preference.LastKnownModelName;
+        return profile.DisplayWidth > 0 && profile.DisplayHeight > 0
+            ? $"Saved display · {profile.DisplayWidth} × {profile.DisplayHeight}"
+            : "Saved display";
+    }
+
+    private async Task<bool> ConfirmRemoveDisconnectedDisplayAsync(string setupId, string monitorId)
+    {
+        if (_setupManager is null || !Setups.State.Setups.Any(setup => setup.Id == setupId)) return false;
+        var setup = Setups.Find(setupId);
+        var confirmation = CreateDialog($"Remove this disconnected display from {setup.Name}?", new TextBlock
+        {
+            Text = "Only Pane’s saved wallpaper and slideshow settings for this display will be removed. Wallpaper files, folders, and Windows display settings will not be changed.",
+            TextWrapping = TextWrapping.Wrap,
+            MaxWidth = 380
+        }, "Remove");
+        if (await confirmation.ShowAsync() != ContentDialogResult.Primary) return false;
+        var freshMonitors = await GetFreshMonitorsForCleanupAsync();
+        if (freshMonitors is null) return false;
+        var previousProfiles = setup.MonitorProfiles.ToArray();
+        var result = Setups.RemoveDisconnectedMonitorProfile(setupId, monitorId, freshMonitors);
+        if (!result.WasRemoved)
+        {
+            ShowSetupStatus(result.Outcome switch
+            {
+                SetupMonitorProfileRemovalOutcome.RefusedConnected => "This display reconnected and was not removed",
+                SetupMonitorProfileRemovalOutcome.RefusedIndeterminate => "Pane could not safely identify this display, so it was not removed",
+                _ => "This saved display was not found"
+            }, showUndo: false);
+            return false;
+        }
+        if (!await SaveSetupStateAsync())
+        {
+            setup.MonitorProfiles.Clear();
+            setup.MonitorProfiles.AddRange(previousProfiles);
+            return false;
+        }
+        RefreshAfterDisplayCleanup(setup);
+        ShowSetupStatus("Disconnected display removed", showUndo: false);
+        return true;
+    }
+
+    private async Task RemoveDisconnectedDisplaysAsync(string setupId, int expectedCount)
+    {
+        if (_setupManager is null || expectedCount <= 0 || !Setups.State.Setups.Any(setup => setup.Id == setupId)) return;
+        CloseSetupPanel();
+        var setup = Setups.Find(setupId);
+        var displayWord = expectedCount == 1 ? "display" : "displays";
+        var confirmation = CreateDialog($"Remove {expectedCount} disconnected {displayWord} from {setup.Name}?", new TextBlock
+        {
+            Text = "Only Pane’s saved settings for these displays will be removed. Wallpaper files, folders, and Windows display settings will not be changed.",
+            TextWrapping = TextWrapping.Wrap,
+            MaxWidth = 380
+        }, "Remove displays");
+        if (await confirmation.ShowAsync() != ContentDialogResult.Primary) return;
+        var freshMonitors = await GetFreshMonitorsForCleanupAsync();
+        if (freshMonitors is null) return;
+        var previousProfiles = setup.MonitorProfiles.ToArray();
+        var result = Setups.RemoveDisconnectedMonitorProfiles(setupId, freshMonitors);
+        if (result.RemovedCount == 0)
+        {
+            ShowSetupStatus("No disconnected displays were removed", showUndo: false);
+            RenderSetupCards();
+            return;
+        }
+        if (!await SaveSetupStateAsync())
+        {
+            setup.MonitorProfiles.Clear();
+            setup.MonitorProfiles.AddRange(previousProfiles);
+            return;
+        }
+        RefreshAfterDisplayCleanup(setup);
+        ShowSetupStatus($"{result.RemovedCount} disconnected {(result.RemovedCount == 1 ? "display" : "displays")} removed", showUndo: false);
+    }
+
+    private async Task<IReadOnlyList<MonitorInfo>?> GetFreshMonitorsForCleanupAsync()
+    {
+        try
+        {
+            return await Monitors.GetMonitorsAsync();
+        }
+        catch (Exception)
+        {
+            ShowSetupStatus("Pane could not verify connected displays, so nothing was removed", showUndo: false);
+            return null;
+        }
+    }
+
+    private void RefreshAfterDisplayCleanup(WallpaperSetup setup)
+    {
+        if (setup.Id == Setups.ActiveSetup.Id) _profiles = setup.MonitorProfiles;
+        UpdateSetupPresentation();
+        RenderSetupCards();
+        if (setup.Id == Setups.ActiveSetup.Id) RenderMonitors();
     }
 
     private async Task BeginSetupNameEditAsync(string setupId)
