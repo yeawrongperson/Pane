@@ -25,8 +25,8 @@ public sealed class SetupStateStore(
         {
             try
             {
-                var state = await ReadStateAsync(token).ConfigureAwait(false);
-                return new(state, false, true, null);
+                var (state, wasMigrated) = await ReadStateAsync(token).ConfigureAwait(false);
+                return new(state, wasMigrated, true, null);
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
             catch (Exception ex) when (IsStateReadFailure(ex))
@@ -79,15 +79,16 @@ public sealed class SetupStateStore(
         }
     }
 
-    private async Task<PaneSetupState> ReadStateAsync(CancellationToken token)
+    private async Task<(PaneSetupState State, bool WasMigrated)> ReadStateAsync(CancellationToken token)
     {
         await using var stream = new FileStream(
             setupStatePath, FileMode.Open, FileAccess.Read, FileShare.Read, 16 * 1024,
             FileOptions.Asynchronous | FileOptions.SequentialScan);
         var state = await JsonSerializer.DeserializeAsync<PaneSetupState>(stream, JsonOptions, token).ConfigureAwait(false)
             ?? throw new InvalidDataException("Pane setup state was empty.");
+        var wasMigrated = SetupStateMigration.UpgradeToCurrent(state);
         SetupStateValidator.Validate(state);
-        return state;
+        return (state, wasMigrated);
     }
 
     private async Task<string?> ReadLegacyNameAsync(CancellationToken token)
@@ -99,4 +100,20 @@ public sealed class SetupStateStore(
 
     private static bool IsStateReadFailure(Exception exception)
         => exception is JsonException or InvalidDataException or IOException or UnauthorizedAccessException or NotSupportedException;
+}
+
+public static class SetupStateMigration
+{
+    public static bool UpgradeToCurrent(PaneSetupState state)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        if (state.SchemaVersion == PaneSetupState.CurrentSchemaVersion) return false;
+        if (state.SchemaVersion != 1)
+            throw new InvalidDataException($"Unsupported Pane setup schema version {state.SchemaVersion}.");
+
+        state.MonitorAliases ??= [];
+        state.MonitorVisualPreferences ??= [];
+        state.SchemaVersion = PaneSetupState.CurrentSchemaVersion;
+        return true;
+    }
 }

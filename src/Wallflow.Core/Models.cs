@@ -6,9 +6,20 @@ public enum TransitionKind { None, SoftFade, Crossfade, BlurDissolve, SlideLeft,
 
 public sealed record MonitorInfo(
     string Id, string DeviceName, string FriendlyName, int X, int Y,
-    int Width, int Height, bool IsPrimary, int RefreshRate = 0)
+    int Width, int Height, bool IsPrimary, int RefreshRate = 0,
+    DisplayOrientation? ReportedOrientation = null,
+    string? ModelName = null,
+    string? ManufacturerId = null,
+    string? ProductCode = null,
+    string? MonitorDevicePath = null,
+    int? PhysicalWidthMillimeters = null,
+    int? PhysicalHeightMillimeters = null,
+    PhysicalSizeSource PhysicalSizeSource = PhysicalSizeSource.None,
+    bool? IsInternal = null)
 {
-    public bool IsPortrait => Height > Width;
+    public DisplayOrientation Orientation => ReportedOrientation ??
+        (Height > Width ? DisplayOrientation.Portrait : DisplayOrientation.Landscape);
+    public bool IsPortrait => Orientation is DisplayOrientation.Portrait or DisplayOrientation.PortraitFlipped;
     public string Resolution => $"{Width} × {Height}";
 }
 

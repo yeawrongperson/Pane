@@ -540,8 +540,66 @@ public sealed class SetupStateStoreTests
         var loaded = await area.Store.LoadOrCreateAsync();
 
         Assert.IsTrue(loaded.CanSave);
+        Assert.IsTrue(loaded.WasMigrated);
+        Assert.AreEqual(PaneSetupState.CurrentSchemaVersion, loaded.State.SchemaVersion);
         Assert.AreEqual(0, loaded.State.MonitorAliases.Count);
+        Assert.AreEqual(0, loaded.State.MonitorVisualPreferences.Count);
         Assert.AreEqual("Legacy", loaded.State.Setups.Single().Name);
+    }
+
+    [TestMethod]
+    public async Task Schema_one_state_migrates_without_losing_setup_profile_alias_or_active_selection()
+    {
+        using var area = new SetupStoreArea();
+        Directory.CreateDirectory(area.Root);
+        await File.WriteAllTextAsync(area.SetupStatePath, """
+            {
+              "SchemaVersion": 1,
+              "ActiveSetupId": "second",
+              "Setups": [
+                {
+                  "Id": "first",
+                  "Name": "First",
+                  "MonitorProfiles": [
+                    { "MonitorId": "monitor-a", "StaticImagePath": "wallpaper.jpg" }
+                  ]
+                },
+                { "Id": "second", "Name": "Second", "MonitorProfiles": [] }
+              ],
+              "MonitorAliases": [
+                { "MonitorId": "monitor-a", "MonitorDevicePath": "DISPLAY1", "Name": "Main" }
+              ]
+            }
+            """);
+
+        var loaded = await area.Store.LoadOrCreateAsync();
+
+        Assert.IsTrue(loaded.CanSave);
+        Assert.IsTrue(loaded.WasMigrated);
+        Assert.AreEqual(2, loaded.State.Setups.Count);
+        Assert.AreEqual("second", loaded.State.ActiveSetupId);
+        Assert.AreEqual("wallpaper.jpg", loaded.State.Setups[0].MonitorProfiles.Single().StaticImagePath);
+        Assert.AreEqual("Main", loaded.State.MonitorAliases.Single().Name);
+        Assert.AreEqual(0, loaded.State.MonitorVisualPreferences.Count);
+    }
+
+    [TestMethod]
+    public async Task Monitor_visual_preference_persists_through_serialization_and_reload()
+    {
+        using var area = new SetupStoreArea();
+        var monitor = new MonitorInfo(
+            "monitor-a", "DISPLAY1", "Display A", 0, 0, 3440, 1440, true,
+            MonitorDevicePath: @"\\?\DISPLAY#ACME#A");
+        var manager = new SetupManager(SetupManager.CreateInitialState());
+        manager.SetMonitorVisualStyle(monitor, DisplayShellStyle.UltrawideCurved, [monitor]);
+        await area.Store.SaveAsync(manager.State);
+
+        var loaded = await area.Store.LoadOrCreateAsync();
+
+        var preference = loaded.State.MonitorVisualPreferences.Single();
+        Assert.AreEqual(DisplayShellStyle.UltrawideCurved, preference.StyleOverride);
+        Assert.AreEqual(monitor.MonitorDevicePath, preference.MonitorDevicePath);
+        Assert.AreEqual(3440, preference.LastKnownWidth);
     }
 
     private sealed class SetupStoreArea : IDisposable

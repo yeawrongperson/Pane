@@ -9,12 +9,13 @@ public sealed class WallpaperSetup
 
 public sealed class PaneSetupState
 {
-    public const int CurrentSchemaVersion = 1;
+    public const int CurrentSchemaVersion = 2;
 
     public int SchemaVersion { get; set; } = CurrentSchemaVersion;
     public required string ActiveSetupId { get; set; }
     public List<WallpaperSetup> Setups { get; set; } = [];
     public List<MonitorAlias> MonitorAliases { get; set; } = [];
+    public List<MonitorVisualPreference> MonitorVisualPreferences { get; set; } = [];
 }
 
 public sealed class MonitorAlias
@@ -22,6 +23,21 @@ public sealed class MonitorAlias
     public required string MonitorId { get; set; }
     public string? MonitorDevicePath { get; set; }
     public required string Name { get; set; }
+}
+
+public sealed class MonitorVisualPreference
+{
+    public required string MonitorId { get; set; }
+    public string? MonitorDevicePath { get; set; }
+    public DisplayShellStyle StyleOverride { get; set; } = DisplayShellStyle.Auto;
+    public string? LastKnownModelName { get; set; }
+    public int LastKnownWidth { get; set; }
+    public int LastKnownHeight { get; set; }
+    public DisplayOrientation LastKnownOrientation { get; set; } = DisplayOrientation.Landscape;
+    public int? LastKnownPhysicalWidthMillimeters { get; set; }
+    public int? LastKnownPhysicalHeightMillimeters { get; set; }
+    public PhysicalSizeSource LastKnownPhysicalSizeSource { get; set; } = PhysicalSizeSource.None;
+    public bool? LastKnownIsInternal { get; set; }
 }
 
 public enum MonitorMatchKind
@@ -209,6 +225,56 @@ public sealed class SetupManager
         return true;
     }
 
+    public void ReconcileMonitorVisualPreferences(IEnumerable<MonitorInfo> connectedMonitors)
+    {
+        ArgumentNullException.ThrowIfNull(connectedMonitors);
+        var connected = connectedMonitors.ToArray();
+        var claimed = new HashSet<MonitorVisualPreference>();
+        foreach (var monitor in connected)
+        {
+            var preference = State.MonitorVisualPreferences.FirstOrDefault(candidate =>
+                !claimed.Contains(candidate) &&
+                string.Equals(candidate.MonitorId, monitor.Id, StringComparison.OrdinalIgnoreCase));
+            var devicePath = VisualDevicePath(monitor);
+            if (preference is null && IsUniqueVisualDevicePath(devicePath, connected))
+                preference = UniqueVisualDevicePathPreference(devicePath, claimed);
+            if (preference is null)
+            {
+                preference = new MonitorVisualPreference { MonitorId = monitor.Id };
+                State.MonitorVisualPreferences.Add(preference);
+            }
+            UpdateVisualPreferenceIdentity(preference, monitor);
+            claimed.Add(preference);
+        }
+    }
+
+    public void SetMonitorVisualStyle(
+        MonitorInfo monitor,
+        DisplayShellStyle styleOverride,
+        IEnumerable<MonitorInfo>? connectedMonitors = null)
+    {
+        ArgumentNullException.ThrowIfNull(monitor);
+        if (!Enum.IsDefined(styleOverride)) throw new ArgumentOutOfRangeException(nameof(styleOverride));
+        var connected = connectedMonitors?.ToArray() ?? [monitor];
+        var preference = FindVisualPreference(monitor, connected);
+        if (preference is null)
+        {
+            preference = new MonitorVisualPreference { MonitorId = monitor.Id };
+            State.MonitorVisualPreferences.Add(preference);
+        }
+        preference.StyleOverride = styleOverride;
+        UpdateVisualPreferenceIdentity(preference, monitor);
+    }
+
+    public MonitorVisualDescriptor GetMonitorVisualDescriptor(
+        MonitorInfo monitor,
+        IEnumerable<MonitorInfo>? connectedMonitors = null)
+    {
+        ArgumentNullException.ThrowIfNull(monitor);
+        var connected = connectedMonitors?.ToArray() ?? [monitor];
+        return MonitorVisualResolver.Resolve(monitor, FindVisualPreference(monitor, connected));
+    }
+
     public WallpaperSetup Find(string setupId)
         => State.Setups.FirstOrDefault(setup => string.Equals(setup.Id, setupId, StringComparison.Ordinal))
            ?? throw new KeyNotFoundException($"Setup '{setupId}' was not found.");
@@ -264,6 +330,55 @@ public sealed class SetupManager
             string.Equals(candidate.MonitorDevicePath, devicePath, StringComparison.OrdinalIgnoreCase)).ToArray();
         return matches.Length == 1 ? matches[0] : null;
     }
+
+    private MonitorVisualPreference? FindVisualPreference(MonitorInfo monitor, IReadOnlyCollection<MonitorInfo> connected)
+    {
+        var preference = State.MonitorVisualPreferences.FirstOrDefault(candidate =>
+            string.Equals(candidate.MonitorId, monitor.Id, StringComparison.OrdinalIgnoreCase));
+        if (preference is not null) return preference;
+        var devicePath = VisualDevicePath(monitor);
+        return IsUniqueVisualDevicePath(devicePath, connected)
+            ? UniqueVisualDevicePathPreference(devicePath)
+            : null;
+    }
+
+    private MonitorVisualPreference? UniqueVisualDevicePathPreference(
+        string? devicePath,
+        HashSet<MonitorVisualPreference>? claimed = null)
+    {
+        if (string.IsNullOrWhiteSpace(devicePath)) return null;
+        var matches = State.MonitorVisualPreferences.Where(candidate =>
+            (claimed is null || !claimed.Contains(candidate)) &&
+            !string.IsNullOrWhiteSpace(candidate.MonitorDevicePath) &&
+            string.Equals(candidate.MonitorDevicePath, devicePath, StringComparison.OrdinalIgnoreCase)).ToArray();
+        return matches.Length == 1 ? matches[0] : null;
+    }
+
+    private static void UpdateVisualPreferenceIdentity(MonitorVisualPreference preference, MonitorInfo monitor)
+    {
+        var physicalSize = PhysicalDisplaySizeValidator.ValidateForClassification(
+            monitor.PhysicalWidthMillimeters,
+            monitor.PhysicalHeightMillimeters,
+            monitor.Width,
+            monitor.Height);
+        preference.MonitorId = monitor.Id;
+        preference.MonitorDevicePath = VisualDevicePath(monitor);
+        preference.LastKnownModelName = monitor.ModelName ?? monitor.FriendlyName;
+        preference.LastKnownWidth = monitor.Width;
+        preference.LastKnownHeight = monitor.Height;
+        preference.LastKnownOrientation = monitor.Orientation;
+        preference.LastKnownPhysicalWidthMillimeters = physicalSize?.WidthMillimeters;
+        preference.LastKnownPhysicalHeightMillimeters = physicalSize?.HeightMillimeters;
+        preference.LastKnownPhysicalSizeSource = physicalSize is null ? PhysicalSizeSource.None : monitor.PhysicalSizeSource;
+        preference.LastKnownIsInternal = monitor.IsInternal;
+    }
+
+    private static string? VisualDevicePath(MonitorInfo monitor)
+        => string.IsNullOrWhiteSpace(monitor.MonitorDevicePath) ? monitor.DeviceName : monitor.MonitorDevicePath;
+
+    private static bool IsUniqueVisualDevicePath(string? devicePath, IEnumerable<MonitorInfo> connectedMonitors)
+        => !string.IsNullOrWhiteSpace(devicePath) && connectedMonitors.Count(candidate =>
+            string.Equals(VisualDevicePath(candidate), devicePath, StringComparison.OrdinalIgnoreCase)) == 1;
 
     private static bool IsUniqueConnectedDevicePath(MonitorInfo monitor, IEnumerable<MonitorInfo> connectedMonitors)
         => !string.IsNullOrWhiteSpace(monitor.DeviceName) && connectedMonitors.Count(candidate =>
@@ -367,6 +482,34 @@ public static class SetupStateValidator
             alias.Name = alias.Name?.Trim() ?? string.Empty;
             if (alias.Name.Length == 0 || alias.Name.Length > SetupManager.MaximumMonitorAliasLength)
                 throw new InvalidDataException($"Monitor aliases must contain between 1 and {SetupManager.MaximumMonitorAliasLength} characters.");
+        }
+
+        state.MonitorVisualPreferences ??= [];
+        var preferenceMonitorIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var preference in state.MonitorVisualPreferences)
+        {
+            if (preference is null || string.IsNullOrWhiteSpace(preference.MonitorId) || !preferenceMonitorIds.Add(preference.MonitorId))
+                throw new InvalidDataException("Monitor visual preference IDs must be non-empty and unique.");
+            if (!Enum.IsDefined(preference.StyleOverride) ||
+                !Enum.IsDefined(preference.LastKnownOrientation) ||
+                !Enum.IsDefined(preference.LastKnownPhysicalSizeSource))
+                throw new InvalidDataException("Monitor visual preferences contain an unsupported style, orientation, or physical-size source.");
+            preference.MonitorDevicePath = string.IsNullOrWhiteSpace(preference.MonitorDevicePath)
+                ? null
+                : preference.MonitorDevicePath.Trim();
+            preference.LastKnownModelName = string.IsNullOrWhiteSpace(preference.LastKnownModelName)
+                ? null
+                : preference.LastKnownModelName.Trim();
+            preference.LastKnownWidth = Math.Max(0, preference.LastKnownWidth);
+            preference.LastKnownHeight = Math.Max(0, preference.LastKnownHeight);
+            var physicalSize = PhysicalDisplaySizeValidator.ValidateForClassification(
+                preference.LastKnownPhysicalWidthMillimeters,
+                preference.LastKnownPhysicalHeightMillimeters,
+                preference.LastKnownWidth,
+                preference.LastKnownHeight);
+            preference.LastKnownPhysicalWidthMillimeters = physicalSize?.WidthMillimeters;
+            preference.LastKnownPhysicalHeightMillimeters = physicalSize?.HeightMillimeters;
+            if (physicalSize is null) preference.LastKnownPhysicalSizeSource = PhysicalSizeSource.None;
         }
 
         var setupIds = new HashSet<string>(StringComparer.Ordinal);

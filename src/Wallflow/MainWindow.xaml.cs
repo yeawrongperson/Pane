@@ -206,6 +206,7 @@ public sealed partial class MainWindow : Window
         _displayList = (await Monitors.GetMonitorsAsync()).ToList();
         Setups.ReconcileActiveMonitors(_displayList);
         Setups.ReconcileMonitorAliases(_displayList);
+        Setups.ReconcileMonitorVisualPreferences(_displayList);
         _profiles = Setups.ActiveSetup.MonitorProfiles;
         await SaveSetupStateAsync();
         UpdateSetupPresentation();
