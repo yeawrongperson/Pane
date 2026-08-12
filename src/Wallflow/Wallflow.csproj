@@ -20,6 +20,8 @@
   </PropertyGroup>
   <ItemGroup>
     <Content Include="Assets\Pane.ico" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <EmbeddedResource Include="Assets\Square44x44Logo.altform-unplated_targetsize-32.png"
+                      LogicalName="Pane.Assets.Square44x44Logo.altform-unplated_targetsize-32.png" />
   </ItemGroup>
   <ItemGroup>
     <FrameworkReference Include="Microsoft.WindowsDesktop.App.WindowsForms" />
