@@ -14,8 +14,8 @@ internal sealed class WindowsMonitorService : IMonitorService
     public Task<IReadOnlyList<MonitorInfo>> GetMonitorsAsync(CancellationToken token = default)
     {
         var displays = new List<MonitorInfo>(); var index = 0;
-        var wallpaperTargets = GetWallpaperTargets();
         var displayMetadata = GetDisplayConfigMetadata();
+        var wallpaperTargets = GetWallpaperTargets();
         var edidPhysicalSizes = GetEdidPhysicalSizes(displayMetadata.Values);
         Native.EnumDisplayMonitors(nint.Zero, nint.Zero, (handle, _, _, _) =>
         {
@@ -23,9 +23,25 @@ internal sealed class WindowsMonitorService : IMonitorService
             if (!Native.GetMonitorInfo(handle, ref info)) return true;
             var mode = new Native.DEVMODE { dmSize = (short)Marshal.SizeOf<Native.DEVMODE>(), dmDeviceName = string.Empty, dmFormName = string.Empty };
             var hasCurrentMode = Native.EnumDisplaySettings(info.szDevice, Native.ENUM_CURRENT_SETTINGS, ref mode);
-            var number = ++index; var width = info.rcMonitor.Right - info.rcMonitor.Left; var height = info.rcMonitor.Bottom - info.rcMonitor.Top;
-            var wallpaperId = wallpaperTargets.FirstOrDefault(target => target.Rect.Left == info.rcMonitor.Left && target.Rect.Top == info.rcMonitor.Top && target.Rect.Right == info.rcMonitor.Right && target.Rect.Bottom == info.rcMonitor.Bottom).Id;
+            var number = ++index;
+            var monitorInfoGeometry = new DisplayGeometry(
+                info.rcMonitor.Left,
+                info.rcMonitor.Top,
+                info.rcMonitor.Right - info.rcMonitor.Left,
+                info.rcMonitor.Bottom - info.rcMonitor.Top);
             displayMetadata.TryGetValue(info.szDevice, out var metadata);
+            var devModeGeometry = hasCurrentMode
+                ? new DisplayGeometry(mode.dmPositionX, mode.dmPositionY, mode.dmPelsWidth, mode.dmPelsHeight)
+                : null;
+            var topologyGeometry = DisplayGeometryResolver.Resolve(
+                monitorInfoGeometry,
+                metadata?.SourceGeometry,
+                devModeGeometry).Geometry;
+            var wallpaperTarget = WallpaperTargetResolver.Resolve(
+                metadata?.MonitorDevicePath,
+                topologyGeometry,
+                monitorInfoGeometry,
+                wallpaperTargets);
             var gdiPhysicalSize = GetGdiEstimatedPhysicalSize(info.szDevice);
             edidPhysicalSizes.TryGetValue(metadata?.MonitorDevicePath ?? string.Empty, out var edidPhysicalSize);
             var hasEdidPhysicalSize = !string.IsNullOrWhiteSpace(metadata?.MonitorDevicePath) &&
@@ -39,17 +55,17 @@ internal sealed class WindowsMonitorService : IMonitorService
                     : PhysicalSizeSource.None;
             var friendlyName = string.IsNullOrWhiteSpace(metadata?.FriendlyName) ? $"Display {number}" : metadata.FriendlyName;
             displays.Add(new(
-                wallpaperId ?? info.szDevice,
+                wallpaperTarget.WallpaperId ?? info.szDevice,
                 info.szDevice,
                 friendlyName,
-                info.rcMonitor.Left,
-                info.rcMonitor.Top,
-                width,
-                height,
+                topologyGeometry.X,
+                topologyGeometry.Y,
+                topologyGeometry.Width,
+                topologyGeometry.Height,
                 (info.dwFlags & 1) != 0,
                 hasCurrentMode && mode.dmDisplayFrequency > 1 ? mode.dmDisplayFrequency : 0,
-                GetDisplayConfigOrientation(metadata?.Rotation, width, height) ??
-                    GetDevModeOrientation(hasCurrentMode ? mode.dmDisplayOrientation : -1, width, height),
+                GetDisplayConfigOrientation(metadata?.Rotation, topologyGeometry.Width, topologyGeometry.Height) ??
+                    GetDevModeOrientation(hasCurrentMode ? mode.dmDisplayOrientation : -1, topologyGeometry.Width, topologyGeometry.Height),
                 metadata?.FriendlyName,
                 metadata?.ManufacturerId,
                 metadata?.ProductCode,
@@ -63,20 +79,6 @@ internal sealed class WindowsMonitorService : IMonitorService
         return Task.FromResult<IReadOnlyList<MonitorInfo>>(displays);
     }
 
-#if DEBUG
-    internal async Task<string> GetDiagnosticSnapshotAsync(
-        Func<MonitorInfo, MonitorVisualPreference?>? preferenceResolver = null,
-        CancellationToken token = default)
-    {
-        var monitors = await GetMonitorsAsync(token);
-        return string.Join(
-            Environment.NewLine + Environment.NewLine,
-            monitors.Select(monitor => MonitorDiagnosticFormatter.Format(
-                monitor,
-                MonitorVisualResolver.Resolve(monitor, preferenceResolver?.Invoke(monitor)))));
-    }
-#endif
-
     private static Dictionary<string, DisplayConfigMetadata> GetDisplayConfigMetadata()
     {
         var result = new Dictionary<string, DisplayConfigMetadata>(StringComparer.OrdinalIgnoreCase);
@@ -85,12 +87,13 @@ internal sealed class WindowsMonitorService : IMonitorService
         {
             for (var attempt = 0; attempt < 3; attempt++)
             {
-                if (Native.GetDisplayConfigBufferSizes(Native.QDC_ONLY_ACTIVE_PATHS, out var pathCount, out var modeCount) != Native.ERROR_SUCCESS)
+                const uint queryFlags = Native.QDC_ONLY_ACTIVE_PATHS | Native.QDC_VIRTUAL_MODE_AWARE;
+                if (Native.GetDisplayConfigBufferSizes(queryFlags, out var pathCount, out var modeCount) != Native.ERROR_SUCCESS)
                     return result;
                 var paths = new Native.DISPLAYCONFIG_PATH_INFO[pathCount];
                 var modes = new Native.DISPLAYCONFIG_MODE_INFO[modeCount];
                 var queryResult = Native.QueryDisplayConfig(
-                    Native.QDC_ONLY_ACTIVE_PATHS,
+                    queryFlags,
                     ref pathCount,
                     paths,
                     ref modeCount,
@@ -116,13 +119,15 @@ internal sealed class WindowsMonitorService : IMonitorService
                         continue;
                     }
                     var hasEdidIds = (targetName.flags & Native.DISPLAYCONFIG_TARGET_NAME_EDID_IDS_VALID) != 0;
+                    var sourceGeometry = GetSourceGeometry(path, modes, modeCount);
                     result[sourceName.viewGdiDeviceName] = new(
                         NullIfWhiteSpace(targetName.monitorFriendlyDeviceName),
                         NullIfWhiteSpace(targetName.monitorDevicePath),
                         hasEdidIds ? targetName.edidManufactureId.ToString("X4") : null,
                         hasEdidIds ? targetName.edidProductCodeId.ToString("X4") : null,
                         path.targetInfo.rotation,
-                        GetInternalState(targetName.outputTechnology));
+                        GetInternalState(targetName.outputTechnology),
+                        sourceGeometry);
                 }
                 return result;
             }
@@ -209,33 +214,83 @@ internal sealed class WindowsMonitorService : IMonitorService
     private static string? NullIfWhiteSpace(string? value)
         => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
+    private static DisplayGeometry? GetSourceGeometry(
+        Native.DISPLAYCONFIG_PATH_INFO path,
+        IReadOnlyList<Native.DISPLAYCONFIG_MODE_INFO> modes,
+        uint modeCount)
+    {
+        var supportsVirtualMode = (path.flags & Native.DISPLAYCONFIG_PATH_SUPPORT_VIRTUAL_MODE) != 0;
+        if (!DisplayConfigSourceModeIndex.TryDecode(
+                path.sourceInfo.modeInfoIdxUnion,
+                supportsVirtualMode,
+                modeCount,
+                out var sourceModeIndex)) return null;
+        var mode = modes[(int)sourceModeIndex];
+        if (mode.infoType != Native.DISPLAYCONFIG_MODE_INFO_TYPE_SOURCE ||
+            mode.id != path.sourceInfo.id ||
+            mode.adapterId.LowPart != path.sourceInfo.adapterId.LowPart ||
+            mode.adapterId.HighPart != path.sourceInfo.adapterId.HighPart) return null;
+        var source = mode.modeInfo.sourceMode;
+        if (source.width > int.MaxValue || source.height > int.MaxValue) return null;
+        var sourceGeometry = new DisplayGeometry(
+            source.position.x,
+            source.position.y,
+            (int)source.width,
+            (int)source.height);
+        var rotation = path.targetInfo.rotation switch
+        {
+            Native.DISPLAYCONFIG_ROTATION_IDENTITY => DisplayConfigRotation.Identity,
+            Native.DISPLAYCONFIG_ROTATION_ROTATE90 => DisplayConfigRotation.Rotate90,
+            Native.DISPLAYCONFIG_ROTATION_ROTATE180 => DisplayConfigRotation.Rotate180,
+            Native.DISPLAYCONFIG_ROTATION_ROTATE270 => DisplayConfigRotation.Rotate270,
+            _ => (DisplayConfigRotation?)null
+        };
+        if (rotation is null) return null;
+        var geometry = DisplayConfigSourceModeFootprint.FromSourceMode(sourceGeometry, rotation.Value);
+        return geometry.IsValid ? geometry : null;
+    }
+
     private sealed record DisplayConfigMetadata(
         string? FriendlyName,
         string? MonitorDevicePath,
         string? ManufacturerId,
         string? ProductCode,
         uint? Rotation,
-        bool? IsInternal);
+        bool? IsInternal,
+        DisplayGeometry? SourceGeometry);
 
-    private static List<(string Id, Native.RECT Rect)> GetWallpaperTargets()
+    private static DisplayGeometry RectGeometry(Native.RECT rect)
+        => new(rect.Left, rect.Top, rect.Right - rect.Left, rect.Bottom - rect.Top);
+
+    private static List<WallpaperTargetCandidate> GetWallpaperTargets()
     {
-        var result = new List<(string, Native.RECT)>();
+        var result = new List<WallpaperTargetCandidate>();
         IDesktopWallpaper? desktop = null;
         try
         {
             desktop = (IDesktopWallpaper)new DesktopWallpaper(); desktop.GetMonitorDevicePathCount(out var count);
             for (uint i = 0; i < count; i++)
             {
-                desktop.GetMonitorDevicePathAt(i, out var pointer);
+                nint pointer = nint.Zero;
                 try
                 {
+                    desktop.GetMonitorDevicePathAt(i, out pointer);
                     var id = Marshal.PtrToStringUni(pointer);
-                    if (!string.IsNullOrWhiteSpace(id)) { desktop.GetMonitorRECT(id, out var rect); result.Add((id, rect)); }
+                    if (string.IsNullOrWhiteSpace(id)) continue;
+                    try
+                    {
+                        desktop.GetMonitorRECT(id, out var rect);
+                        result.Add(new(id, RectGeometry(rect), true));
+                    }
+                    catch (Exception ex) when (ex is COMException or ArgumentException)
+                    {
+                        result.Add(new(id, null, false));
+                    }
                 }
                 finally { if (pointer != nint.Zero) Marshal.FreeCoTaskMem(pointer); }
             }
         }
-        catch (COMException) { }
+        catch (Exception ex) when (ex is COMException or ArgumentException) { }
         finally { if (desktop is not null) Marshal.FinalReleaseComObject(desktop); }
         return result;
     }
@@ -246,10 +301,23 @@ internal sealed class DesktopWallpaperService : IWallpaperService
     public async Task SetWallpaperAsync(string monitorId, string imagePath, WallpaperFit fit, CancellationToken token = default)
     {
         token.ThrowIfCancellationRequested(); if (!File.Exists(imagePath)) throw new FileNotFoundException("Wallpaper image was not found.", imagePath);
+        if (string.IsNullOrWhiteSpace(monitorId) || monitorId.StartsWith(@"\\.\DISPLAY", StringComparison.OrdinalIgnoreCase))
+            throw new WallpaperItemException(
+                "Windows could not identify this display for wallpaper assignment.",
+                new ArgumentException("The monitor ID is not an active IDesktopWallpaper target.", nameof(monitorId)));
         var desktop = (IDesktopWallpaper)new DesktopWallpaper();
         try
         {
-            desktop.GetMonitorRECT(monitorId, out var rect);
+            Native.RECT rect;
+            try { desktop.GetMonitorRECT(monitorId, out rect); }
+            catch (ArgumentException ex)
+            {
+                throw new WallpaperItemException("Windows could not identify this display for wallpaper assignment.", ex);
+            }
+            catch (COMException ex) when (ex.HResult == Native.E_INVALIDARG)
+            {
+                throw new WallpaperItemException("Windows could not identify this display for wallpaper assignment.", ex);
+            }
             var preparedPath = await WallpaperImageRenderer.PrepareAsync(imagePath, rect.Right - rect.Left, rect.Bottom - rect.Top, fit, token);
             // IDesktopWallpaper positioning is global. Every image is rendered to its monitor's exact
             // dimensions first, so a single neutral Stretch position preserves independent fit choices.
@@ -325,8 +393,12 @@ internal static class Native
 {
     internal const int ENUM_CURRENT_SETTINGS = -1;
     internal const uint QDC_ONLY_ACTIVE_PATHS = 0x00000002;
+    internal const uint QDC_VIRTUAL_MODE_AWARE = 0x00000010;
+    internal const uint DISPLAYCONFIG_PATH_SUPPORT_VIRTUAL_MODE = 0x00000008;
+    internal const uint DISPLAYCONFIG_MODE_INFO_TYPE_SOURCE = 1;
     internal const int ERROR_SUCCESS = 0;
     internal const int ERROR_INSUFFICIENT_BUFFER = 122;
+    internal const int E_INVALIDARG = unchecked((int)0x80070057);
     internal const int HORZSIZE = 4;
     internal const int VERTSIZE = 6;
     internal const uint DISPLAYCONFIG_TARGET_NAME_EDID_IDS_VALID = 0x00000004;
@@ -375,7 +447,9 @@ internal static class Native
     internal struct DISPLAYCONFIG_PATH_SOURCE_INFO
     {
         public LUID adapterId;
-        public uint id, modeInfoIdx, statusFlags;
+        public uint id;
+        public uint modeInfoIdxUnion;
+        public uint statusFlags;
     }
     [StructLayout(LayoutKind.Sequential)]
     internal struct DISPLAYCONFIG_PATH_TARGET_INFO
@@ -396,8 +470,20 @@ internal static class Native
         public DISPLAYCONFIG_PATH_TARGET_INFO targetInfo;
         public uint flags;
     }
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct POINTL { public int x, y; }
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct DISPLAYCONFIG_SOURCE_MODE
+    {
+        public uint width, height;
+        public uint pixelFormat;
+        public POINTL position;
+    }
     [StructLayout(LayoutKind.Explicit, Size = 48)]
-    internal struct DISPLAYCONFIG_MODE_INFO_UNION { }
+    internal struct DISPLAYCONFIG_MODE_INFO_UNION
+    {
+        [FieldOffset(0)] public DISPLAYCONFIG_SOURCE_MODE sourceMode;
+    }
     [StructLayout(LayoutKind.Sequential)]
     internal struct DISPLAYCONFIG_MODE_INFO
     {
