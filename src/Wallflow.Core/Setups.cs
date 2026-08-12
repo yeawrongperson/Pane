@@ -59,6 +59,48 @@ public sealed record SetupMonitorResolution(
     public int ConnectedDisplayCount => Matches.Count;
 }
 
+public enum SetupMonitorProfileConnection
+{
+    Connected,
+    Disconnected,
+    Indeterminate
+}
+
+public sealed record SetupMonitorProfileStatus(
+    MonitorWallpaperProfile Profile,
+    SetupMonitorProfileConnection Connection,
+    MonitorInfo? Monitor = null);
+
+public sealed record SetupMonitorInventory(IReadOnlyList<SetupMonitorProfileStatus> Profiles)
+{
+    public int SavedDisplayCount => Profiles.Count;
+    public int ConnectedDisplayCount => Profiles.Count(status => status.Connection == SetupMonitorProfileConnection.Connected);
+    public int DisconnectedDisplayCount => Profiles.Count(status => status.Connection == SetupMonitorProfileConnection.Disconnected);
+    public int IndeterminateDisplayCount => Profiles.Count(status => status.Connection == SetupMonitorProfileConnection.Indeterminate);
+}
+
+public enum SetupMonitorProfileRemovalOutcome
+{
+    Removed,
+    NotFound,
+    RefusedConnected,
+    RefusedIndeterminate
+}
+
+public sealed record SetupMonitorProfileRemovalResult(
+    SetupMonitorProfileRemovalOutcome Outcome,
+    string? MonitorId)
+{
+    public bool WasRemoved => Outcome == SetupMonitorProfileRemovalOutcome.Removed;
+}
+
+public sealed record SetupDisconnectedProfilesRemovalResult(
+    bool SetupFound,
+    IReadOnlyList<string> RemovedMonitorIds)
+{
+    public int RemovedCount => RemovedMonitorIds.Count;
+}
+
 public sealed record SetupDeleteResult(string DeletedSetupId, string ActiveSetupId, bool ActiveSetupChanged);
 
 public sealed class SetupManager
@@ -160,6 +202,45 @@ public sealed class SetupManager
 
     public SetupMonitorResolution ReconcileActiveMonitors(IEnumerable<MonitorInfo> connectedMonitors)
         => SetupMonitorMatcher.Reconcile(ActiveSetup, connectedMonitors);
+
+    public SetupMonitorInventory AnalyzeMonitorProfiles(
+        string setupId,
+        IEnumerable<MonitorInfo> connectedMonitors)
+        => SetupMonitorConnectionAnalyzer.Analyze(Find(setupId), connectedMonitors);
+
+    public SetupMonitorProfileRemovalResult RemoveDisconnectedMonitorProfile(
+        string setupId,
+        string monitorId,
+        IEnumerable<MonitorInfo> connectedMonitors)
+    {
+        ArgumentNullException.ThrowIfNull(monitorId);
+        ArgumentNullException.ThrowIfNull(connectedMonitors);
+        var setup = State.Setups.FirstOrDefault(candidate => string.Equals(candidate.Id, setupId, StringComparison.Ordinal));
+        if (setup is null) return new(SetupMonitorProfileRemovalOutcome.NotFound, monitorId);
+        var status = SetupMonitorConnectionAnalyzer.Analyze(setup, connectedMonitors).Profiles.FirstOrDefault(candidate =>
+            string.Equals(candidate.Profile.MonitorId, monitorId, StringComparison.OrdinalIgnoreCase));
+        if (status is null) return new(SetupMonitorProfileRemovalOutcome.NotFound, monitorId);
+        if (status.Connection == SetupMonitorProfileConnection.Connected)
+            return new(SetupMonitorProfileRemovalOutcome.RefusedConnected, status.Profile.MonitorId);
+        if (status.Connection == SetupMonitorProfileConnection.Indeterminate)
+            return new(SetupMonitorProfileRemovalOutcome.RefusedIndeterminate, status.Profile.MonitorId);
+        setup.MonitorProfiles.Remove(status.Profile);
+        return new(SetupMonitorProfileRemovalOutcome.Removed, status.Profile.MonitorId);
+    }
+
+    public SetupDisconnectedProfilesRemovalResult RemoveDisconnectedMonitorProfiles(
+        string setupId,
+        IEnumerable<MonitorInfo> connectedMonitors)
+    {
+        ArgumentNullException.ThrowIfNull(connectedMonitors);
+        var setup = State.Setups.FirstOrDefault(candidate => string.Equals(candidate.Id, setupId, StringComparison.Ordinal));
+        if (setup is null) return new(false, []);
+        var removable = SetupMonitorConnectionAnalyzer.Analyze(setup, connectedMonitors).Profiles
+            .Where(status => status.Connection == SetupMonitorProfileConnection.Disconnected)
+            .ToArray();
+        foreach (var status in removable) setup.MonitorProfiles.Remove(status.Profile);
+        return new(true, removable.Select(status => status.Profile.MonitorId).ToArray());
+    }
 
     public void ReconcileMonitorAliases(IEnumerable<MonitorInfo> connectedMonitors)
     {
@@ -410,6 +491,78 @@ public sealed class SetupManager
         if (normalized.Length > MaximumSetupNameLength)
             throw new ArgumentException($"Setup names can contain at most {MaximumSetupNameLength} characters.", nameof(name));
         return normalized;
+    }
+}
+
+public static class SetupMonitorConnectionAnalyzer
+{
+    public static SetupMonitorInventory Analyze(
+        WallpaperSetup setup,
+        IEnumerable<MonitorInfo> connectedMonitors)
+    {
+        ArgumentNullException.ThrowIfNull(setup);
+        ArgumentNullException.ThrowIfNull(connectedMonitors);
+        var monitors = connectedMonitors.ToArray();
+        var claimedProfiles = new HashSet<MonitorWallpaperProfile>();
+        var claimedMonitorIndexes = new HashSet<int>();
+        var connections = setup.MonitorProfiles.ToDictionary(
+            profile => profile,
+            _ => SetupMonitorProfileConnection.Disconnected);
+        var matchedMonitors = new Dictionary<MonitorWallpaperProfile, MonitorInfo>();
+
+        for (var monitorIndex = 0; monitorIndex < monitors.Length; monitorIndex++)
+        {
+            var monitor = monitors[monitorIndex];
+            var exact = setup.MonitorProfiles.FirstOrDefault(profile =>
+                !claimedProfiles.Contains(profile) &&
+                string.Equals(profile.MonitorId, monitor.Id, StringComparison.OrdinalIgnoreCase));
+            if (exact is null) continue;
+            connections[exact] = SetupMonitorProfileConnection.Connected;
+            matchedMonitors[exact] = monitor;
+            claimedProfiles.Add(exact);
+            claimedMonitorIndexes.Add(monitorIndex);
+        }
+
+        for (var monitorIndex = 0; monitorIndex < monitors.Length; monitorIndex++)
+        {
+            if (claimedMonitorIndexes.Contains(monitorIndex)) continue;
+            var monitor = monitors[monitorIndex];
+            if (string.IsNullOrWhiteSpace(monitor.DeviceName)) continue;
+            var candidates = setup.MonitorProfiles.Where(profile =>
+                !claimedProfiles.Contains(profile) &&
+                !string.IsNullOrWhiteSpace(profile.MonitorDevicePath) &&
+                string.Equals(profile.MonitorDevicePath, monitor.DeviceName, StringComparison.OrdinalIgnoreCase)).ToArray();
+            if (candidates.Length == 1)
+            {
+                connections[candidates[0]] = SetupMonitorProfileConnection.Connected;
+                matchedMonitors[candidates[0]] = monitor;
+                claimedProfiles.Add(candidates[0]);
+                continue;
+            }
+            if (candidates.Length <= 1) continue;
+            foreach (var candidate in candidates)
+                connections[candidate] = SetupMonitorProfileConnection.Indeterminate;
+        }
+
+        return new(setup.MonitorProfiles.Select(profile => new SetupMonitorProfileStatus(
+            profile,
+            connections[profile],
+            matchedMonitors.GetValueOrDefault(profile))).ToArray());
+    }
+}
+
+public static class SetupConnectionSummaryFormatter
+{
+    public static string Format(SetupMonitorInventory inventory)
+    {
+        ArgumentNullException.ThrowIfNull(inventory);
+        if (inventory.SavedDisplayCount == 0) return "No saved displays";
+        var parts = new List<string> { $"{inventory.ConnectedDisplayCount} connected" };
+        if (inventory.DisconnectedDisplayCount > 0)
+            parts.Add($"{inventory.DisconnectedDisplayCount} disconnected");
+        if (inventory.IndeterminateDisplayCount > 0)
+            parts.Add($"{inventory.IndeterminateDisplayCount} uncertain");
+        return string.Join(" · ", parts);
     }
 }
 

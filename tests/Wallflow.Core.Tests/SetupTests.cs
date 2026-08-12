@@ -379,6 +379,241 @@ public sealed class SetupTests
     }
 
     [TestMethod]
+    public void One_definitively_disconnected_profile_can_be_removed()
+    {
+        var manager = new SetupManager(SetupManager.CreateInitialState("Default", [Profile(MonitorA), Profile(MonitorB)]));
+
+        var result = manager.RemoveDisconnectedMonitorProfile(manager.ActiveSetup.Id, MonitorB.Id, [MonitorA]);
+
+        Assert.AreEqual(SetupMonitorProfileRemovalOutcome.Removed, result.Outcome);
+        CollectionAssert.AreEqual(new[] { MonitorA.Id }, manager.ActiveSetup.MonitorProfiles.Select(profile => profile.MonitorId).ToArray());
+    }
+
+    [TestMethod]
+    public void Connected_profile_removal_is_refused()
+    {
+        var manager = new SetupManager(SetupManager.CreateInitialState("Default", [Profile(MonitorA)]));
+
+        var result = manager.RemoveDisconnectedMonitorProfile(manager.ActiveSetup.Id, MonitorA.Id, [MonitorA]);
+
+        Assert.AreEqual(SetupMonitorProfileRemovalOutcome.RefusedConnected, result.Outcome);
+        Assert.AreEqual(1, manager.ActiveSetup.MonitorProfiles.Count);
+    }
+
+    [TestMethod]
+    public void Ambiguous_legacy_fallback_is_indeterminate_and_cannot_be_removed()
+    {
+        var first = Profile(new("old-1", "DISPLAY9", "Old 1", 0, 0, 1920, 1080, false));
+        var second = Profile(new("old-2", "DISPLAY9", "Old 2", 0, 0, 1920, 1080, false));
+        var connected = new MonitorInfo("current", "DISPLAY9", "Current", 0, 0, 1920, 1080, true);
+        var manager = new SetupManager(SetupManager.CreateInitialState("Default", [first, second]));
+
+        var inventory = manager.AnalyzeMonitorProfiles(manager.ActiveSetup.Id, [connected]);
+        var result = manager.RemoveDisconnectedMonitorProfile(manager.ActiveSetup.Id, first.MonitorId, [connected]);
+
+        Assert.IsTrue(inventory.Profiles.All(status => status.Connection == SetupMonitorProfileConnection.Indeterminate));
+        Assert.AreEqual(SetupMonitorProfileRemovalOutcome.RefusedIndeterminate, result.Outcome);
+        Assert.AreEqual(2, manager.ActiveSetup.MonitorProfiles.Count);
+    }
+
+    [TestMethod]
+    public void Unique_legacy_gdi_fallback_protects_profile_as_connected()
+    {
+        var saved = Profile(new("old", MonitorA.DeviceName, "Old", 0, 0, 1920, 1080, false));
+        var manager = new SetupManager(SetupManager.CreateInitialState("Default", [saved]));
+        var reconnected = MonitorA with { Id = "new-id" };
+
+        var inventory = manager.AnalyzeMonitorProfiles(manager.ActiveSetup.Id, [reconnected]);
+
+        Assert.AreEqual(SetupMonitorProfileConnection.Connected, inventory.Profiles.Single().Connection);
+        Assert.AreEqual(0, manager.RemoveDisconnectedMonitorProfiles(manager.ActiveSetup.Id, [reconnected]).RemovedCount);
+    }
+
+    [TestMethod]
+    public void Exact_ids_are_claimed_before_fallback_candidates()
+    {
+        var exact = Profile(new("exact", "DISPLAY9", "Exact", 0, 0, 1920, 1080, false));
+        var fallback = Profile(new("old", "DISPLAY9", "Fallback", 1920, 0, 1920, 1080, false));
+        var exactMonitor = new MonitorInfo("exact", "DISPLAY9", "Exact current", 0, 0, 1920, 1080, false);
+        var fallbackMonitor = new MonitorInfo("new", "DISPLAY9", "Fallback current", 1920, 0, 1920, 1080, false);
+        var manager = new SetupManager(SetupManager.CreateInitialState("Default", [fallback, exact]));
+
+        var inventory = manager.AnalyzeMonitorProfiles(manager.ActiveSetup.Id, [fallbackMonitor, exactMonitor]);
+
+        Assert.AreSame(exactMonitor, inventory.Profiles.Single(status => status.Profile.MonitorId == exact.MonitorId).Monitor);
+        Assert.AreSame(fallbackMonitor, inventory.Profiles.Single(status => status.Profile.MonitorId == fallback.MonitorId).Monitor);
+        Assert.AreEqual(2, inventory.ConnectedDisplayCount);
+    }
+
+    [TestMethod]
+    public void Bulk_removal_preserves_connected_ambiguous_and_other_setup_profiles()
+    {
+        var connected = Profile(MonitorA);
+        var stale = Profile(MonitorB);
+        var ambiguousOne = Profile(new("old-1", "DISPLAY9", "Old 1", 0, 0, 1920, 1080, false));
+        var ambiguousTwo = Profile(new("old-2", "DISPLAY9", "Old 2", 0, 0, 1920, 1080, false));
+        var manager = new SetupManager(SetupManager.CreateInitialState("First", [connected, stale, ambiguousOne, ambiguousTwo]));
+        var targetSetup = manager.ActiveSetup;
+        var other = manager.Duplicate(targetSetup.Id);
+        var ambiguousMonitor = new MonitorInfo("current-vdd", "DISPLAY9", "VDD", 0, 0, 1920, 1080, false);
+
+        var result = manager.RemoveDisconnectedMonitorProfiles(targetSetup.Id, [MonitorA, ambiguousMonitor]);
+
+        CollectionAssert.AreEqual(new[] { MonitorB.Id }, result.RemovedMonitorIds.ToArray());
+        CollectionAssert.AreEquivalent(new[] { MonitorA.Id, "old-1", "old-2" }, targetSetup.MonitorProfiles.Select(profile => profile.MonitorId).ToArray());
+        Assert.AreEqual(4, other.MonitorProfiles.Count);
+    }
+
+    [TestMethod]
+    public void Bulk_removal_preserves_configuration_aliases_and_visual_preferences()
+    {
+        var remaining = Profile(MonitorA, "remaining.jpg");
+        remaining.Mode = WallpaperMode.Slideshow;
+        remaining.SlideshowFolderPath = "remaining-folder";
+        remaining.SlideshowInterval = TimeSpan.FromMinutes(30);
+        remaining.ShuffleEnabled = false;
+        remaining.LoopEnabled = false;
+        remaining.FitMode = WallpaperFit.Center;
+        remaining.Transition = TransitionKind.SlideLeft;
+        remaining.TransitionDurationMs = 1234;
+        remaining.CurrentSlideshowIndex = 7;
+        remaining.LastWallpaperPath = "last.jpg";
+        remaining.Enabled = false;
+        var stale = Profile(MonitorB, "stale.jpg");
+        var manager = new SetupManager(SetupManager.CreateInitialState("Default", [remaining, stale]));
+        manager.State.MonitorAliases.Add(new() { MonitorId = MonitorB.Id, Name = "Old VDD" });
+        manager.State.MonitorVisualPreferences.Add(new() { MonitorId = MonitorB.Id, LastKnownModelName = "VDD" });
+
+        manager.RemoveDisconnectedMonitorProfiles(manager.ActiveSetup.Id, [MonitorA]);
+
+        var actual = manager.ActiveSetup.MonitorProfiles.Single();
+        Assert.AreEqual("remaining.jpg", actual.StaticImagePath);
+        Assert.AreEqual("remaining-folder", actual.SlideshowFolderPath);
+        Assert.AreEqual(TimeSpan.FromMinutes(30), actual.SlideshowInterval);
+        Assert.IsFalse(actual.ShuffleEnabled);
+        Assert.IsFalse(actual.LoopEnabled);
+        Assert.AreEqual(WallpaperFit.Center, actual.FitMode);
+        Assert.AreEqual(TransitionKind.SlideLeft, actual.Transition);
+        Assert.AreEqual(1234, actual.TransitionDurationMs);
+        Assert.AreEqual(7, actual.CurrentSlideshowIndex);
+        Assert.AreEqual("last.jpg", actual.LastWallpaperPath);
+        Assert.IsFalse(actual.Enabled);
+        Assert.AreEqual(1, manager.State.MonitorAliases.Count);
+        Assert.AreEqual(1, manager.State.MonitorVisualPreferences.Count);
+    }
+
+    [TestMethod]
+    public void Disconnected_profile_can_reconnect_normally_when_not_removed()
+    {
+        var manager = new SetupManager(SetupManager.CreateInitialState("Default", [Profile(MonitorA), Profile(MonitorB)]));
+        Assert.AreEqual(SetupMonitorProfileConnection.Disconnected,
+            manager.AnalyzeMonitorProfiles(manager.ActiveSetup.Id, [MonitorA]).Profiles.Single(status => status.Profile.MonitorId == MonitorB.Id).Connection);
+
+        var resolution = manager.ReconcileActiveMonitors([MonitorA, MonitorB]);
+
+        Assert.AreEqual(MonitorMatchKind.ExactId, resolution.Matches.Single(match => match.Monitor.Id == MonitorB.Id).Kind);
+        Assert.AreEqual(2, manager.ActiveSetup.MonitorProfiles.Count);
+    }
+
+    [TestMethod]
+    public void Manually_removed_monitor_reconnects_as_new_profile()
+    {
+        var manager = new SetupManager(SetupManager.CreateInitialState("Default", [Profile(MonitorB)]));
+        Assert.IsTrue(manager.RemoveDisconnectedMonitorProfile(manager.ActiveSetup.Id, MonitorB.Id, []).WasRemoved);
+
+        var resolution = manager.ReconcileActiveMonitors([MonitorB]);
+
+        Assert.AreEqual(MonitorMatchKind.Created, resolution.Matches.Single().Kind);
+        Assert.AreEqual(MonitorB.Id, manager.ActiveSetup.MonitorProfiles.Single().MonitorId);
+    }
+
+    [TestMethod]
+    public void Cleanup_can_leave_a_valid_zero_profile_setup()
+    {
+        var manager = new SetupManager(SetupManager.CreateInitialState("Default", [Profile(MonitorA)]));
+
+        manager.RemoveDisconnectedMonitorProfiles(manager.ActiveSetup.Id, []);
+        SetupStateValidator.Validate(manager.State);
+
+        Assert.AreEqual(0, manager.ActiveSetup.MonitorProfiles.Count);
+    }
+
+    [TestMethod]
+    public void Vdd_cleanup_keeps_two_exact_current_profiles_and_removes_safe_stale_profiles()
+    {
+        var currentOne = new MonitorInfo("vdd-current-1", "DISPLAY15", "VDD 1", 0, 0, 1920, 1080, false);
+        var currentTwo = new MonitorInfo("vdd-current-2", "DISPLAY16", "VDD 2", 1920, 0, 1920, 1080, false);
+        var profiles = new[]
+        {
+            Profile(new("vdd-stale-1", "DISPLAY10", "Old VDD", 0, 0, 1920, 1080, false)),
+            Profile(new("vdd-stale-2", "DISPLAY11", "Old VDD", 0, 0, 1920, 1080, false)),
+            Profile(new("vdd-stale-3", "DISPLAY12", "Old VDD", 0, 0, 1920, 1080, false)),
+            Profile(currentOne),
+            Profile(currentTwo)
+        };
+        var manager = new SetupManager(SetupManager.CreateInitialState("VDD", profiles));
+
+        var result = manager.RemoveDisconnectedMonitorProfiles(manager.ActiveSetup.Id, [currentOne, currentTwo]);
+
+        Assert.AreEqual(3, result.RemovedCount);
+        CollectionAssert.AreEquivalent(new[] { currentOne.Id, currentTwo.Id }, manager.ActiveSetup.MonitorProfiles.Select(profile => profile.MonitorId).ToArray());
+    }
+
+    [TestMethod]
+    public void Two_connected_monitors_cannot_claim_or_delete_the_same_profile()
+    {
+        var saved = Profile(new("old", "DISPLAY9", "Old", 0, 0, 1920, 1080, false));
+        var first = new MonitorInfo("new-1", "DISPLAY9", "First", 0, 0, 1920, 1080, false);
+        var second = new MonitorInfo("new-2", "DISPLAY9", "Second", 1920, 0, 1920, 1080, false);
+        var manager = new SetupManager(SetupManager.CreateInitialState("Default", [saved]));
+
+        var inventory = manager.AnalyzeMonitorProfiles(manager.ActiveSetup.Id, [first, second]);
+        var result = manager.RemoveDisconnectedMonitorProfiles(manager.ActiveSetup.Id, [first, second]);
+
+        Assert.AreEqual(1, inventory.ConnectedDisplayCount);
+        Assert.AreEqual(0, result.RemovedCount);
+        Assert.AreEqual(1, manager.ActiveSetup.MonitorProfiles.Count);
+    }
+
+    [TestMethod]
+    public void Nonexistent_setup_or_profile_is_non_mutating()
+    {
+        var manager = new SetupManager(SetupManager.CreateInitialState("Default", [Profile(MonitorA)]));
+
+        var missingSetup = manager.RemoveDisconnectedMonitorProfiles("missing", []);
+        var missingProfile = manager.RemoveDisconnectedMonitorProfile(manager.ActiveSetup.Id, "missing", []);
+
+        Assert.IsFalse(missingSetup.SetupFound);
+        Assert.AreEqual(SetupMonitorProfileRemovalOutcome.NotFound, missingProfile.Outcome);
+        Assert.AreEqual(1, manager.ActiveSetup.MonitorProfiles.Count);
+    }
+
+    [TestMethod]
+    public void Repeated_bulk_cleanup_is_idempotent()
+    {
+        var manager = new SetupManager(SetupManager.CreateInitialState("Default", [Profile(MonitorA), Profile(MonitorB)]));
+
+        var first = manager.RemoveDisconnectedMonitorProfiles(manager.ActiveSetup.Id, [MonitorA]);
+        var second = manager.RemoveDisconnectedMonitorProfiles(manager.ActiveSetup.Id, [MonitorA]);
+
+        Assert.AreEqual(1, first.RemovedCount);
+        Assert.AreEqual(0, second.RemovedCount);
+    }
+
+    [DataTestMethod]
+    [DataRow(4, 0, 0, "4 connected")]
+    [DataRow(4, 7, 0, "4 connected · 7 disconnected")]
+    [DataRow(0, 7, 0, "0 connected · 7 disconnected")]
+    [DataRow(4, 5, 2, "4 connected · 5 disconnected · 2 uncertain")]
+    [DataRow(1, 1, 1, "1 connected · 1 disconnected · 1 uncertain")]
+    public void Connection_summary_formats_counts(int connected, int disconnected, int uncertain, string expected)
+        => Assert.AreEqual(expected, SetupConnectionSummaryFormatter.Format(Inventory(connected, disconnected, uncertain)));
+
+    [TestMethod]
+    public void Connection_summary_handles_zero_saved_profiles()
+        => Assert.AreEqual("No saved displays", SetupConnectionSummaryFormatter.Format(new([])));
+
+    [TestMethod]
     public void Floating_panel_position_is_clamped_to_available_bounds()
     {
         var position = FloatingPanelPlacement.Clamp(-30, 900, 420, 560, 1100, 800);
@@ -402,11 +637,65 @@ public sealed class SetupTests
         profile.StaticImagePath = image;
         return profile;
     }
+
+    private static SetupMonitorInventory Inventory(int connected, int disconnected, int uncertain)
+    {
+        var statuses = new List<SetupMonitorProfileStatus>();
+        void Add(int count, SetupMonitorProfileConnection connection)
+        {
+            for (var index = 0; index < count; index++)
+                statuses.Add(new(new MonitorWallpaperProfile { MonitorId = $"{connection}-{statuses.Count}" }, connection));
+        }
+        Add(connected, SetupMonitorProfileConnection.Connected);
+        Add(disconnected, SetupMonitorProfileConnection.Disconnected);
+        Add(uncertain, SetupMonitorProfileConnection.Indeterminate);
+        return new(statuses);
+    }
 }
 
 [TestClass]
 public sealed class SetupStateStoreTests
 {
+    [TestMethod]
+    public async Task Schema_two_state_with_zero_profile_setup_remains_compatible()
+    {
+        using var area = new SetupStoreArea();
+        Directory.CreateDirectory(area.Root);
+        await File.WriteAllTextAsync(area.SetupStatePath, """
+            {
+              "SchemaVersion": 2,
+              "ActiveSetupId": "empty",
+              "Setups": [
+                { "Id": "empty", "Name": "Empty", "MonitorProfiles": [] }
+              ],
+              "MonitorAliases": [],
+              "MonitorVisualPreferences": []
+            }
+            """);
+
+        var loaded = await area.Store.LoadOrCreateAsync();
+
+        Assert.IsTrue(loaded.CanSave);
+        Assert.IsFalse(loaded.WasMigrated);
+        Assert.AreEqual(0, loaded.State.Setups.Single().MonitorProfiles.Count);
+    }
+
+    [TestMethod]
+    public async Task Removed_disconnected_profile_stays_removed_after_reload()
+    {
+        using var area = new SetupStoreArea();
+        var connected = new MonitorInfo("connected", "DISPLAY1", "Connected", 0, 0, 1920, 1080, true);
+        var stale = new MonitorInfo("stale", "DISPLAY2", "Stale", 1920, 0, 1920, 1080, false);
+        var manager = new SetupManager(SetupManager.CreateInitialState("Default",
+            [SetupManager.CreateProfile(connected), SetupManager.CreateProfile(stale)]));
+        manager.RemoveDisconnectedMonitorProfiles(manager.ActiveSetup.Id, [connected]);
+
+        await area.Store.SaveAsync(manager.State);
+        var loaded = await area.Store.LoadOrCreateAsync();
+
+        CollectionAssert.AreEqual(new[] { connected.Id }, loaded.State.Setups.Single().MonitorProfiles.Select(profile => profile.MonitorId).ToArray());
+    }
+
     [TestMethod]
     public async Task Active_setup_and_rename_survive_restart()
     {
