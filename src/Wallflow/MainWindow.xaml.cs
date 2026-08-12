@@ -28,6 +28,7 @@ public sealed partial class MainWindow : Window
     private readonly SetupStateStore? _setupStore;
     private readonly AppWindow _appWindow;
     private readonly TrayIconService? _trayIcon;
+    private System.Drawing.Icon? _windowIcon;
     private readonly Dictionary<string, SlideshowSession> _sessions = [];
     private readonly LatestScanCoordinator<string> _folderScans = new();
     private readonly LatestSetupSwitchCoordinator _setupSwitches = new();
@@ -69,8 +70,7 @@ public sealed partial class MainWindow : Window
         if (startupOptions.AllowsWallpaperChanges) _wallpaper = new DesktopWallpaperService();
         InitializeComponent(); ExtendsContentIntoTitleBar = true; SetTitleBar(AppTitleBar);
         _appWindow = GetAppWindow(); _appWindow.Resize(new SizeInt32(1100, 800));
-        var windowIconPath = Path.Combine(AppContext.BaseDirectory, "Assets", "Pane.ico");
-        if (File.Exists(windowIconPath)) _appWindow.SetIcon(windowIconPath);
+        SetEmbeddedWindowIcon();
         _appWindow.TitleBar.ButtonBackgroundColor = Colors.Transparent; _appWindow.TitleBar.ButtonInactiveBackgroundColor = Colors.Transparent;
         if (startupOptions.CreatesTrayIcon) _trayIcon = new TrayIconService(ShowAndActivate, ExitFromTray);
         _appWindow.Closing += (_, args) =>
@@ -102,6 +102,8 @@ public sealed partial class MainWindow : Window
             await _setupSwitches.DisposeAsync();
             _folderScans.Dispose();
             _trayIcon?.Dispose();
+            _windowIcon?.Dispose();
+            _windowIcon = null;
             if (_startupOptions.IsSmokeTest)
             {
                 Application.Current.Exit();
@@ -117,6 +119,22 @@ public sealed partial class MainWindow : Window
     private SetupManager Setups => _setupManager ?? throw new InvalidOperationException("Pane setups have not been initialized.");
     private IMonitorService Monitors => _monitors ?? throw new InvalidOperationException("Monitor initialization is disabled.");
     private IWallpaperService Wallpaper => _wallpaper ?? throw new InvalidOperationException("Wallpaper changes are disabled.");
+    private void SetEmbeddedWindowIcon()
+    {
+        try
+        {
+            var executablePath = Environment.ProcessPath;
+            if (string.IsNullOrWhiteSpace(executablePath)) return;
+            _windowIcon = System.Drawing.Icon.ExtractAssociatedIcon(executablePath);
+            if (_windowIcon is not null)
+                _appWindow.SetIcon(Win32Interop.GetIconIdFromIcon(_windowIcon.Handle));
+        }
+        catch
+        {
+            _windowIcon?.Dispose();
+            _windowIcon = null;
+        }
+    }
     private void CompleteSmokeTest() { _exitRequested = true; Close(); }
     internal void ShowAndActivate()
     {
