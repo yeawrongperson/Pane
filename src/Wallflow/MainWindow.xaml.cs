@@ -568,15 +568,10 @@ public sealed partial class MainWindow : Window
     {
         const double canvasWidth = 112;
         const double canvasHeight = 48;
-        var canvas = new Canvas { Width = canvasWidth, Height = canvasHeight, VerticalAlignment = VerticalAlignment.Center };
-        var profiles = setup.MonitorProfiles.Take(5).Select((profile, index) => new
-        {
-            Profile = profile,
-            X = profile.DisplayWidth > 0 ? profile.DisplayX : index * 1920,
-            Y = profile.DisplayHeight > 0 ? profile.DisplayY : 0,
-            Width = profile.DisplayWidth > 0 ? profile.DisplayWidth : 1920,
-            Height = profile.DisplayHeight > 0 ? profile.DisplayHeight : 1080
-        }).ToArray();
+        const int visibleLimit = 5;
+        var canvas = new Canvas { Width = canvasWidth, Height = canvasHeight, VerticalAlignment = VerticalAlignment.Center,
+            Clip = new RectangleGeometry { Rect = new Windows.Foundation.Rect(0, 0, canvasWidth, canvasHeight) } };
+        var profiles = setup.MonitorProfiles.Take(visibleLimit).ToArray();
         if (profiles.Length == 0)
         {
             canvas.Children.Add(new Border { Width = 42, Height = 25, CornerRadius = new CornerRadius(4), Background = CreateTopologyGradient(), BorderBrush = (Brush)Application.Current.Resources["BorderBrush"], BorderThickness = new Thickness(1) });
@@ -585,41 +580,27 @@ public sealed partial class MainWindow : Window
             return canvas;
         }
 
-        var minX = profiles.Min(item => item.X);
-        var minY = profiles.Min(item => item.Y);
-        var maxX = profiles.Max(item => item.X + item.Width);
-        var maxY = profiles.Max(item => item.Y + item.Height);
-        var xPositions = profiles.Select(item => item.X).Distinct().Order().ToArray();
-        var yPositions = profiles.Select(item => item.Y).Distinct().Order().ToArray();
-        const double monitorGap = 5;
-        var horizontalGapWidth = Math.Max(0, xPositions.Length - 1) * monitorGap;
-        var verticalGapHeight = Math.Max(0, yPositions.Length - 1) * monitorGap;
-        var scale = Math.Min(
-            Math.Max(1, canvasWidth - 6 - horizontalGapWidth) / Math.Max(1, maxX - minX),
-            Math.Max(1, canvasHeight - 6 - verticalGapHeight) / Math.Max(1, maxY - minY));
-        var layoutWidth = (maxX - minX) * scale + horizontalGapWidth;
-        var layoutHeight = (maxY - minY) * scale + verticalGapHeight;
-        foreach (var item in profiles)
+        var entries = profiles.Select((profile, index) =>
         {
-            var connected = _displayList.Any(display =>
-                string.Equals(display.Id, item.Profile.MonitorId, StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(display.DeviceName, item.Profile.MonitorDevicePath, StringComparison.OrdinalIgnoreCase));
-            var screen = new Border
-            {
-                Width = Math.Max(9, item.Width * scale),
-                Height = Math.Max(8, item.Height * scale),
-                CornerRadius = new CornerRadius(3),
-                Background = CreateTopologyGradient(),
-                BorderBrush = connected ? (Brush)Application.Current.Resources["AccentBrush"] : (Brush)Application.Current.Resources["BorderBrush"],
-                BorderThickness = new Thickness(1),
-                Opacity = connected ? 1 : 0.58
-            };
-            var horizontalRank = Array.IndexOf(xPositions, item.X);
-            var verticalRank = Array.IndexOf(yPositions, item.Y);
-            Canvas.SetLeft(screen, (canvasWidth - layoutWidth) / 2 + (item.X - minX) * scale + horizontalRank * monitorGap);
-            Canvas.SetTop(screen, (canvasHeight - layoutHeight) / 2 + (item.Y - minY) * scale + verticalRank * monitorGap);
-            canvas.Children.Add(screen);
-            _ = LoadTopologyThumbnailAsync(item.Profile, screen);
+            var live = _displayList.FirstOrDefault(display =>
+                string.Equals(display.Id, profile.MonitorId, StringComparison.OrdinalIgnoreCase) ||
+                (!string.IsNullOrWhiteSpace(profile.MonitorDevicePath) && string.Equals(display.DeviceName, profile.MonitorDevicePath, StringComparison.OrdinalIgnoreCase)));
+            var descriptor = live is null ? SavedMonitorVisualResolver.Resolve(profile, Setups.State.MonitorVisualPreferences)
+                : Setups.GetMonitorVisualDescriptor(live, _displayList);
+            return new { Profile = profile, Live = live, Descriptor = descriptor, Key = $"{index}:{profile.MonitorId}" };
+        }).ToArray();
+        var topologyWidth = setup.MonitorProfiles.Count > visibleLimit ? 94d : canvasWidth;
+        var layout = MonitorTopologyLayout.Calculate(entries.Select(item => new MonitorTopologyItem(item.Key,
+            item.Profile.DisplayX, item.Profile.DisplayY, item.Profile.DisplayWidth, item.Profile.DisplayHeight,
+            item.Descriptor, item.Live is not null)), topologyWidth, canvasHeight, 3, 2);
+        foreach (var placement in layout.Placements)
+        {
+            var item = entries.First(entry => entry.Key == placement.Key);
+            var shell = MonitorShellRenderer.Create(new(item.Descriptor, placement.Width, placement.Height,
+                WallpaperPath(item.Profile), item.Profile.FitMode, false, placement.IsConnected, MonitorShellRenderMode.Compact));
+            Canvas.SetLeft(shell, placement.X);
+            Canvas.SetTop(shell, placement.Y);
+            canvas.Children.Add(shell);
         }
         if (setup.MonitorProfiles.Count > profiles.Length)
         {
@@ -631,57 +612,20 @@ public sealed partial class MainWindow : Window
         return canvas;
     }
 
-    private static async Task LoadTopologyThumbnailAsync(MonitorWallpaperProfile profile, Border screen)
+    private static string? WallpaperPath(MonitorWallpaperProfile profile)
     {
         var candidates = profile.Mode == WallpaperMode.Slideshow
             ? new[] { profile.LastWallpaperPath }
             : new[] { profile.LastWallpaperPath, profile.StaticImagePath };
-        string? sourcePath = null;
         foreach (var candidate in candidates)
         {
-            if (string.IsNullOrWhiteSpace(candidate) || !ImageCatalog.IsSupported(candidate)) continue;
-            bool exists;
-            try { exists = await Task.Run(() => File.Exists(candidate)); }
-            catch { exists = false; }
-            if (!exists) continue;
-            sourcePath = candidate;
-            break;
-        }
-        if (sourcePath is null) return;
-
-        var fallbackBackground = screen.Background;
-        try
-        {
-            screen.Background = new SolidColorBrush(ColorHelper.FromArgb(255, 9, 10, 13));
-            var bitmap = new BitmapImage { DecodePixelWidth = 160 };
-            var image = new Image
+            try
             {
-                Source = bitmap,
-                Stretch = PreviewStretch(profile.FitMode),
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center
-            };
-            var previewLayer = new Grid
-            {
-                Clip = new RectangleGeometry
-                {
-                    Rect = new Windows.Foundation.Rect(0, 0, screen.Width, screen.Height)
-                }
-            };
-            previewLayer.Children.Add(image);
-            bitmap.ImageFailed += (_, _) =>
-            {
-                screen.Child = null;
-                screen.Background = fallbackBackground;
-            };
-            screen.Child = previewLayer;
-            bitmap.UriSource = new Uri(sourcePath);
+                if (!string.IsNullOrWhiteSpace(candidate) && ImageCatalog.IsSupported(candidate) && File.Exists(candidate)) return candidate;
+            }
+            catch { }
         }
-        catch
-        {
-            screen.Child = null;
-            screen.Background = fallbackBackground;
-        }
+        return null;
     }
 
     private static Stretch PreviewStretch(WallpaperFit fitMode) => fitMode switch
@@ -1123,46 +1067,46 @@ public sealed partial class MainWindow : Window
     }
     private void RenderMonitors()
     {
-        MonitorCanvas.Children.Clear(); if (_displayList.Count == 0) return;
-        var minX = _displayList.Min(x => x.X); var minY = _displayList.Min(x => x.Y); var maxX = _displayList.Max(x => x.X + x.Width); var maxY = _displayList.Max(x => x.Y + x.Height);
-        var availableW = Math.Max(500, MonitorCanvas.ActualWidth - 60); var availableH = Math.Max(80, MonitorCanvas.ActualHeight - 72);
-        var scale = Math.Min(availableW / (maxX - minX), availableH / (maxY - minY)) * .78;
-        var xPositions = _displayList.Select(display => display.X).Distinct().Order().ToArray();
-        const double monitorGap = 30;
-        var layoutW = (maxX - minX) * scale + Math.Max(0, xPositions.Length - 1) * monitorGap; var layoutH = (maxY - minY) * scale;
-        foreach (var display in _displayList)
+        MonitorCanvas.Children.Clear();
+        if (_displayList.Count == 0 || MonitorCanvas.ActualWidth <= 0 || MonitorCanvas.ActualHeight <= 0) return;
+        const double labelHeight = 24;
+        const double shellChromeHeight = 18;
+        var descriptors = _displayList.ToDictionary(display => display.Id,
+            display => Setups.GetMonitorVisualDescriptor(display, _displayList), StringComparer.OrdinalIgnoreCase);
+        var layout = MonitorTopologyLayout.Calculate(_displayList.Select(display => new MonitorTopologyItem(
+            display.Id, display.X, display.Y, display.Width, display.Height, descriptors[display.Id], true)),
+            MonitorCanvas.ActualWidth, Math.Max(1, MonitorCanvas.ActualHeight - labelHeight - shellChromeHeight), 8, 16);
+        foreach (var placement in layout.Placements)
         {
-            // Scale each screen with one factor so its detected aspect ratio is never distorted.
-            var w = display.Width * scale; var h = display.Height * scale;
-            var minimumLongEdge = display.IsPortrait ? 100d : 125d;
-            var longEdge = display.IsPortrait ? h : w;
-            var sizeFactor = longEdge < minimumLongEdge ? minimumLongEdge / longEdge : 1d;
-            var maximumHeight = Math.Max(100, MonitorCanvas.ActualHeight - 70);
-            var maximumWidth = display.IsPortrait ? 120d : 250d;
-            sizeFactor = Math.Min(sizeFactor, Math.Min(maximumWidth / w, maximumHeight / h));
-            w = Math.Max(48, w * sizeFactor); h = Math.Max(48, h * sizeFactor);
-            var horizontalRank = Array.IndexOf(xPositions, display.X);
-            var card = CreateMonitor(display, w, h); Canvas.SetLeft(card, (MonitorCanvas.ActualWidth - layoutW) / 2 + (display.X - minX) * scale + horizontalRank * monitorGap); Canvas.SetTop(card, 12 + (display.Y - minY) * scale); MonitorCanvas.Children.Add(card);
+            var display = _displayList.First(item => string.Equals(item.Id, placement.Key, StringComparison.OrdinalIgnoreCase));
+            var card = CreateMonitorShell(display, descriptors[display.Id], placement.Width, placement.Height, labelHeight);
+            Canvas.SetLeft(card, placement.X);
+            Canvas.SetTop(card, placement.Y);
+            MonitorCanvas.Children.Add(card);
         }
     }
-    private FrameworkElement CreateMonitor(MonitorInfo display, double width, double height)
+
+    private FrameworkElement CreateMonitorShell(MonitorInfo display, MonitorVisualDescriptor descriptor, double width, double height, double labelHeight)
     {
-        var profile = Profile(display); var selected = _selected?.Id == display.Id; var container = new Grid { Width = width + 20, Height = height + 62, Tag = display };
-        var glow = new Border { Margin = new Thickness(2), CornerRadius = new CornerRadius(20), Background = selected ? new SolidColorBrush(ColorHelper.FromArgb(24, 124, 140, 255)) : new SolidColorBrush(Colors.Transparent) };
-        var stack = new StackPanel { VerticalAlignment = VerticalAlignment.Top };
-        var frame = new Border { Height = height, Margin = new Thickness(10, 4, 10, 0), Padding = new Thickness(5), CornerRadius = new CornerRadius(12), Background = new SolidColorBrush(ColorHelper.FromArgb(255, 35, 38, 47)), BorderThickness = new Thickness(1), BorderBrush = new SolidColorBrush(selected ? ColorHelper.FromArgb(42, 124, 140, 255) : ColorHelper.FromArgb(20, 255, 255, 255)) };
-        var screen = new Grid { Background = new LinearGradientBrush { StartPoint = new(.1, 0), EndPoint = new(.9, 1), GradientStops = { new GradientStop { Color = ColorHelper.FromArgb(255, 33, 45, 74) }, new GradientStop { Color = ColorHelper.FromArgb(255, 87, 62, 105), Offset = 1 } } } };
-        var path = profile.LastWallpaperPath ?? profile.StaticImagePath;
-        if (File.Exists(path))
-        {
-            var previewStretch = PreviewStretch(profile.FitMode);
-            screen.Children.Add(new Image { Source = new BitmapImage(new Uri(path)), Stretch = previewStretch, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center });
-        }
-        screen.Children.Add(new Border { VerticalAlignment = VerticalAlignment.Top, Height = height * .22, Background = new LinearGradientBrush { StartPoint = new(.5, 0), EndPoint = new(.5, 1), GradientStops = { new GradientStop { Color = ColorHelper.FromArgb(18, 255, 255, 255) }, new GradientStop { Color = Colors.Transparent, Offset = 1 } } } }); frame.Child = screen;
-        stack.Children.Add(frame); stack.Children.Add(new Border { Width = 12, Height = 13, Background = new SolidColorBrush(ColorHelper.FromArgb(255, 48, 51, 60)), HorizontalAlignment = HorizontalAlignment.Center }); stack.Children.Add(new Border { Width = Math.Min(68, width * .4), Height = 5, CornerRadius = new CornerRadius(3), Background = new SolidColorBrush(ColorHelper.FromArgb(255, 55, 58, 68)), HorizontalAlignment = HorizontalAlignment.Center });
-        var label = new TextBlock { Text = MonitorDisplayName(display) + (display.IsPrimary ? "  •  PRIMARY" : ""), FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 12, HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 8, 0, 0) }; stack.Children.Add(label);
-        container.Children.Add(glow); container.Children.Add(stack); container.PointerPressed += (_, _) => SelectMonitor(display); return container;
+        var profile = Profile(display);
+        var selected = _selected?.Id == display.Id;
+        var chromeHeight = MonitorShellRenderer.FullChromeHeight(height);
+        var container = new Grid { Width = width, Height = height + chromeHeight + labelHeight, Tag = display };
+        container.RowDefinitions.Add(new RowDefinition { Height = new GridLength(height + chromeHeight) });
+        container.RowDefinitions.Add(new RowDefinition { Height = new GridLength(labelHeight) });
+        var name = MonitorDisplayName(display) + (display.IsPrimary ? "  •  PRIMARY" : "");
+        container.Children.Add(MonitorShellRenderer.Create(new(descriptor, width, height, WallpaperPath(profile),
+            profile.FitMode, selected, true, MonitorShellRenderMode.Full, name)));
+        var label = new TextBlock { Text = name, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 12,
+            HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
+            TextTrimming = TextTrimming.CharacterEllipsis, MaxWidth = Math.Max(1, width) };
+        Grid.SetRow(label, 1);
+        container.Children.Add(label);
+        AutomationProperties.SetName(container, name);
+        container.PointerPressed += (_, _) => SelectMonitor(display);
+        return container;
     }
+
     private MonitorWallpaperProfile Profile(MonitorInfo info) => _profiles.First(profile => string.Equals(profile.MonitorId, info.Id, StringComparison.OrdinalIgnoreCase));
     private void SelectMonitor(MonitorInfo monitor)
     {
