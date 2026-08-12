@@ -157,8 +157,12 @@ try {
 
     if (-not $Version) {
         [xml]$props = Get-Content -Raw -LiteralPath $versionProps
-        $prefix = [string]$props.Project.PropertyGroup.VersionPrefix
-        $suffix = [string]$props.Project.PropertyGroup.VersionSuffix
+        $versionPropertyGroup = $props.SelectSingleNode('/Project/PropertyGroup[VersionPrefix]')
+        if ($null -eq $versionPropertyGroup) { throw 'Directory.Build.props does not define VersionPrefix.' }
+        $prefixNode = $versionPropertyGroup.SelectSingleNode('VersionPrefix')
+        $suffixNode = $versionPropertyGroup.SelectSingleNode('VersionSuffix')
+        $prefix = $prefixNode.InnerText.Trim()
+        $suffix = if ($null -ne $suffixNode) { $suffixNode.InnerText.Trim() } else { '' }
         if (-not $prefix) { throw 'Directory.Build.props does not define VersionPrefix.' }
         $Version = if ($suffix) { "$prefix-$suffix" } else { $prefix }
     }
@@ -240,21 +244,23 @@ try {
     @"
 # Pane $Version
 
-Early beta release of Pane.
+Preview release of Pane.
 
 ## Included
-- Per-monitor static wallpaper configuration
+- Per-monitor static wallpapers
 - Independent per-monitor slideshows
-- Monitor detection and topology visualization
-- Persisted display profiles
-- Notification-area background operation
+- Adaptive Setups
+- Monitor aliases
+- Retention of disconnected-monitor configuration
+- Visual Setup previews
+- Undo when switching Setups
+- Notification-area operation
 
 ## Requirements
-- Windows 10 or Windows 11
-- x64 PC
+- Windows 10 or Windows 11 on an x64 PC
 
 ## Notes
-This is an unsigned early beta. Windows SmartScreen may show an unknown-publisher warning.
+This is an unsigned preview. Windows SmartScreen may show an Unknown Publisher warning.
 "@ | Set-Content -LiteralPath $releaseNotesPath -Encoding utf8
 
     Add-Type -AssemblyName System.IO.Compression.FileSystem
