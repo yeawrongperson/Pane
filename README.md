@@ -196,7 +196,7 @@ From the repository root:
 A specific version can also be supplied:
 
 ```powershell
-.\scripts\release.ps1 -Version 0.2.0-preview
+.\scripts\release.ps1 -Version 0.2.1-preview
 ```
 
 Release output is written to:
