@@ -214,6 +214,12 @@ public sealed partial class MainWindow : Window
         {
             RenderMonitors();
             _selected = null;
+            _updatingEditor = true;
+            DisplayStyleBox.SelectedIndex = -1;
+            _updatingEditor = false;
+            DisplayStyleBox.IsEnabled = false;
+            DetectedDisplayStyleText.Text = "";
+            AutomationProperties.SetName(DisplayStyleBox, "Display style for selected display");
             Editor.IsHitTestVisible = false;
             Editor.Opacity = 0.55;
             SelectedName.Text = "No displays detected";
@@ -1127,8 +1133,56 @@ public sealed partial class MainWindow : Window
         var intervalMinutes = Math.Max(1, (int)Math.Round(profile.SlideshowInterval.TotalMinutes));
         IntervalBox.SelectedIndex = Enumerable.Range(0, IntervalBox.Items.Count)
             .FirstOrDefault(index => IntervalBox.Items[index] is ComboBoxItem item && item.Tag?.ToString() == intervalMinutes.ToString(), 2);
+        var descriptor = Setups.GetMonitorVisualDescriptor(monitor, _displayList);
+        var styleOverride = descriptor.StyleSource == DisplayStyleSource.ManualOverride
+            ? descriptor.ResolvedShellStyle
+            : DisplayShellStyle.Auto;
+        DisplayStyleBox.SelectedItem = FindDisplayStyleItem(styleOverride);
+        DisplayStyleBox.IsEnabled = true;
+        UpdateDisplayStyleHelper(monitor, styleOverride);
+        AutomationProperties.SetName(DisplayStyleBox, $"Display style for {SelectedName.Text}");
         _updatingEditor = false;
         SetPreview(profile.LastWallpaperPath ?? profile.StaticImagePath); ValidationText.Text = ""; RenderMonitors();
+    }
+    private ComboBoxItem? FindDisplayStyleItem(DisplayShellStyle style)
+        => DisplayStyleBox.Items.OfType<ComboBoxItem>().FirstOrDefault(item =>
+            Enum.TryParse<DisplayShellStyle>(item.Tag?.ToString(), out var itemStyle) && itemStyle == style);
+    private string DisplayStyleLabel(DisplayShellStyle style)
+        => FindDisplayStyleItem(style)?.Content?.ToString() ?? "Display style";
+    private void UpdateDisplayStyleHelper(MonitorInfo monitor, DisplayShellStyle styleOverride)
+    {
+        var automaticDescriptor = MonitorVisualResolver.Resolve(monitor);
+        var prefix = styleOverride == DisplayShellStyle.Auto ? "Detected" : "Auto detects";
+        var details = new List<string> { DisplayStyleLabel(automaticDescriptor.ResolvedShellStyle) };
+        if (automaticDescriptor is
+            {
+                PhysicalSizeConfidence: PhysicalSizeConfidence.EdidReported,
+                PhysicalDiagonalInches: double diagonalInches
+            })
+            details.Add($"{diagonalInches:F1}\"");
+        details.Add(DisplayOrientationLabel(automaticDescriptor.Orientation));
+        DetectedDisplayStyleText.Text = $"{prefix}: {string.Join(" · ", details)}";
+    }
+    private static string DisplayOrientationLabel(DisplayOrientation orientation) => orientation switch
+    {
+        DisplayOrientation.Landscape => "Landscape",
+        DisplayOrientation.Portrait => "Portrait",
+        DisplayOrientation.LandscapeFlipped => "Landscape (flipped)",
+        DisplayOrientation.PortraitFlipped => "Portrait (flipped)",
+        _ => "Landscape"
+    };
+    private async void DisplayStyleBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_updatingEditor || _selected is null ||
+            DisplayStyleBox.SelectedItem is not ComboBoxItem item ||
+            !Enum.TryParse<DisplayShellStyle>(item.Tag?.ToString(), out var styleOverride) ||
+            !Enum.IsDefined(styleOverride)) return;
+
+        Setups.SetMonitorVisualStyle(_selected, styleOverride, _displayList);
+        UpdateDisplayStyleHelper(_selected, styleOverride);
+        await SaveSetupStateAsync();
+        RenderMonitors();
+        if (SetupPanel.Visibility == Visibility.Visible) RenderSetupCards();
     }
     private string MonitorDisplayName(MonitorInfo monitor)
         => _setupManager is null ? monitor.FriendlyName : Setups.GetMonitorDisplayName(monitor, _displayList);
