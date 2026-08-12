@@ -81,7 +81,7 @@ The latest preview builds are available under **[Releases](https://github.com/ye
 Download the Windows x64 ZIP:
 
 ```text
-Pane-0.2.0-preview-win-x64.zip
+Pane-0.2.1-preview-win-x64.zip
 ```
 
 Extract it somewhere you want to keep Pane, then run:
