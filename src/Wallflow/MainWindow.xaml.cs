@@ -12,6 +12,7 @@ using Microsoft.UI.Xaml.Media.Imaging;
 using Microsoft.UI.Xaml.Media.Animation;
 using System.Numerics;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices.WindowsRuntime;
 using Wallflow.Core;
 using Windows.Graphics;
 using Windows.Storage.Pickers;
@@ -21,6 +22,7 @@ namespace Wallflow;
 
 public sealed partial class MainWindow : Window
 {
+    private const string TitleBarLogoResourceName = "Pane.Assets.Square44x44Logo.altform-unplated_targetsize-32.png";
     private readonly PaneStartupOptions _startupOptions;
     private readonly IMonitorService? _monitors;
     private readonly IWallpaperService? _wallpaper;
@@ -68,7 +70,7 @@ public sealed partial class MainWindow : Window
                 Path.Combine(_settingsFolder, "setup-name.txt"));
         }
         if (startupOptions.AllowsWallpaperChanges) _wallpaper = new DesktopWallpaperService();
-        InitializeComponent(); ExtendsContentIntoTitleBar = true; SetTitleBar(AppTitleBar);
+        InitializeComponent(); LoadEmbeddedTitleBarLogo(); ExtendsContentIntoTitleBar = true; SetTitleBar(AppTitleBar);
         _appWindow = GetAppWindow(); _appWindow.Resize(new SizeInt32(1100, 800));
         SetEmbeddedWindowIcon();
         _appWindow.TitleBar.ButtonBackgroundColor = Colors.Transparent; _appWindow.TitleBar.ButtonInactiveBackgroundColor = Colors.Transparent;
@@ -119,6 +121,22 @@ public sealed partial class MainWindow : Window
     private SetupManager Setups => _setupManager ?? throw new InvalidOperationException("Pane setups have not been initialized.");
     private IMonitorService Monitors => _monitors ?? throw new InvalidOperationException("Monitor initialization is disabled.");
     private IWallpaperService Wallpaper => _wallpaper ?? throw new InvalidOperationException("Wallpaper changes are disabled.");
+    private void LoadEmbeddedTitleBarLogo()
+    {
+        try
+        {
+            using var resourceStream = typeof(MainWindow).Assembly.GetManifestResourceStream(TitleBarLogoResourceName);
+            if (resourceStream is null) return;
+            using var imageStream = resourceStream.AsRandomAccessStream();
+            var image = new BitmapImage();
+            image.SetSource(imageStream);
+            TitleBarLogo.Source = image;
+        }
+        catch
+        {
+            TitleBarLogo.Source = null;
+        }
+    }
     private void SetEmbeddedWindowIcon()
     {
         try
