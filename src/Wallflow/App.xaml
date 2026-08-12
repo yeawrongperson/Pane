@@ -262,6 +262,43 @@
                 </Setter>
             </Style>
 
+            <Style x:Key="InlineRenameTextBoxStyle" TargetType="TextBox">
+                <Setter Property="Foreground" Value="#F5FFFFFF"/>
+                <Setter Property="Background" Value="#D9181A20"/>
+                <Setter Property="BorderBrush" Value="#14FFFFFF"/>
+                <Setter Property="BorderThickness" Value="1"/>
+                <Setter Property="CornerRadius" Value="9"/>
+                <Setter Property="Padding" Value="7,2"/>
+                <Setter Property="MinHeight" Value="36"/>
+                <Setter Property="SelectionHighlightColor" Value="#FF7C8CFF"/>
+                <Setter Property="UseSystemFocusVisuals" Value="False"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="TextBox">
+                            <Grid x:Name="InlineRenameRoot">
+                                <Border x:Name="InlineRenameSurface" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="{TemplateBinding CornerRadius}">
+                                    <ScrollViewer x:Name="ContentElement" Padding="{TemplateBinding Padding}" HorizontalScrollMode="Auto" VerticalScrollMode="Disabled" HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Hidden"/>
+                                </Border>
+                                <VisualStateManager.VisualStateGroups>
+                                    <VisualStateGroup x:Name="CommonStates">
+                                        <VisualStateGroup.Transitions><VisualTransition GeneratedDuration="0:0:0.12"/></VisualStateGroup.Transitions>
+                                        <VisualState x:Name="Normal"/>
+                                        <VisualState x:Name="PointerOver"><VisualState.Setters><Setter Target="InlineRenameSurface.Background" Value="#E81D2027"/><Setter Target="InlineRenameSurface.BorderBrush" Value="#20FFFFFF"/></VisualState.Setters></VisualState>
+                                        <VisualState x:Name="Disabled"><VisualState.Setters><Setter Target="InlineRenameRoot.Opacity" Value="0.45"/></VisualState.Setters></VisualState>
+                                    </VisualStateGroup>
+                                    <VisualStateGroup x:Name="FocusStates">
+                                        <VisualStateGroup.Transitions><VisualTransition GeneratedDuration="0:0:0.12"/></VisualStateGroup.Transitions>
+                                        <VisualState x:Name="Unfocused"/>
+                                        <VisualState x:Name="PointerFocused"><VisualState.Setters><Setter Target="InlineRenameSurface.Background" Value="#F01D2028"/><Setter Target="InlineRenameSurface.BorderBrush" Value="#387C8CFF"/></VisualState.Setters></VisualState>
+                                        <VisualState x:Name="Focused"><VisualState.Setters><Setter Target="InlineRenameSurface.Background" Value="#F01D2028"/><Setter Target="InlineRenameSurface.BorderBrush" Value="#387C8CFF"/></VisualState.Setters></VisualState>
+                                    </VisualStateGroup>
+                                </VisualStateManager.VisualStateGroups>
+                            </Grid>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+
             <Style TargetType="ComboBox" BasedOn="{StaticResource DefaultComboBoxStyle}">
                 <Setter Property="Background" Value="#D922252D"/>
                 <Setter Property="BorderBrush" Value="#28FFFFFF"/>

@@ -47,6 +47,10 @@ public sealed partial class MainWindow : Window
     private FloatingPanelPosition _setupPanelDragOrigin;
     private bool _editingMonitorName;
     private MonitorInfo? _monitorNameEditTarget;
+    private string? _editingSetupNameId;
+    private TextBox? _setupNameEditor;
+    private TextBlock? _setupNameDisplay;
+    private Button? _setupNameFocusTarget;
     private SpriteVisual? _setupPanelShadowVisual;
     private CompositionRoundedRectangleGeometry? _setupPanelShadowGeometry;
 
@@ -91,6 +95,7 @@ public sealed partial class MainWindow : Window
         };
         RootGrid.SizeChanged += RootGrid_SizeChanged;
         RootGrid.KeyDown += RootGrid_KeyDown;
+        RootGrid.AddHandler(UIElement.PointerPressedEvent, new PointerEventHandler(RootGrid_PointerPressed), true);
         SetupPanel.SizeChanged += SetupPanel_SizeChanged;
         Closed += async (_, _) =>
         {
@@ -265,6 +270,23 @@ public sealed partial class MainWindow : Window
         e.Handled = true;
     }
 
+    private async void RootGrid_PointerPressed(object sender, PointerRoutedEventArgs e)
+    {
+        var source = e.OriginalSource as DependencyObject;
+        if (_editingMonitorName && !IsWithinElement(source, MonitorNameEditor))
+            await CompleteMonitorNameEditAsync(save: true, restoreNeutralFocus: false);
+        if (_editingSetupNameId is not null && !IsWithinElement(source, _setupNameEditor))
+            await CompleteSetupNameEditAsync(save: true, restoreNeutralFocus: false);
+    }
+
+    private static bool IsWithinElement(DependencyObject? source, DependencyObject? target)
+    {
+        if (source is null || target is null) return false;
+        for (var current = source; current is not null; current = VisualTreeHelper.GetParent(current))
+            if (ReferenceEquals(current, target)) return true;
+        return false;
+    }
+
     private void SetupPanelDismissLayer_PointerPressed(object sender, PointerRoutedEventArgs e)
     {
         CloseSetupPanel();
@@ -425,8 +447,10 @@ public sealed partial class MainWindow : Window
         var topology = CreateMiniTopology(setup);
         Grid.SetColumn(topology, 0);
         content.Children.Add(topology);
+        var editingName = string.Equals(_editingSetupNameId, setup.Id, StringComparison.Ordinal);
         var text = new StackPanel { Spacing = 4, VerticalAlignment = VerticalAlignment.Center };
-        text.Children.Add(new TextBlock { Text = setup.Name, FontSize = 16, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis, MaxWidth = 190 });
+        var nameDisplay = new TextBlock { Text = setup.Name, FontSize = 16, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis, MaxWidth = 190, Opacity = editingName ? 0 : 1 };
+        text.Children.Add(nameDisplay);
         text.Children.Add(new TextBlock { Text = summary, FontSize = 12, Foreground = (Brush)Application.Current.Resources["SecondaryTextBrush"], TextTrimming = TextTrimming.CharacterEllipsis });
         Grid.SetColumn(text, 1);
         content.Children.Add(text);
@@ -460,7 +484,7 @@ public sealed partial class MainWindow : Window
         ToolTipService.SetToolTip(more, "Setup options");
         var menu = new MenuFlyout();
         var rename = new MenuFlyoutItem { Text = "Rename", Icon = new SymbolIcon(Symbol.Edit) };
-        rename.Click += async (_, _) => await RenameSetupAsync(setup.Id);
+        rename.Click += async (_, _) => await BeginSetupNameEditAsync(setup.Id);
         var duplicate = new MenuFlyoutItem { Text = "Duplicate", Icon = new SymbolIcon(Symbol.Copy) };
         duplicate.Click += async (_, _) => await DuplicateSetupAsync(setup.Id);
         var delete = new MenuFlyoutItem { Text = "Delete", Icon = new SymbolIcon(Symbol.Delete), IsEnabled = Setups.State.Setups.Count > 1 };
@@ -474,6 +498,32 @@ public sealed partial class MainWindow : Window
         var host = new Grid();
         host.Children.Add(card);
         host.Children.Add(more);
+        if (editingName)
+        {
+            var editor = new TextBox
+            {
+                Text = setup.Name,
+                MaxLength = SetupManager.MaximumSetupNameLength,
+                FontSize = 16,
+                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                Style = (Style)Application.Current.Resources["InlineRenameTextBoxStyle"],
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                VerticalAlignment = VerticalAlignment.Top,
+                Margin = new Thickness(149, 10, 52, 0)
+            };
+            editor.KeyDown += SetupNameEditor_KeyDown;
+            editor.LostFocus += SetupNameEditor_LostFocus;
+            host.Children.Add(editor);
+            _setupNameEditor = editor;
+            _setupNameDisplay = nameDisplay;
+            _setupNameFocusTarget = card;
+            DispatcherQueue.TryEnqueue(() =>
+            {
+                if (!ReferenceEquals(_setupNameEditor, editor) || editor.Visibility != Visibility.Visible) return;
+                editor.Focus(FocusState.Programmatic);
+                editor.SelectAll();
+            });
+        }
         return host;
     }
 
@@ -774,35 +824,65 @@ public sealed partial class MainWindow : Window
         ShowSetupStatus($"{duplicate.Name} created", showUndo: false);
     }
 
-    private async Task RenameSetupAsync(string setupId)
+    private async Task BeginSetupNameEditAsync(string setupId)
     {
-        CloseSetupPanel();
-        var setup = Setups.Find(setupId);
-        var nameBox = new TextBox
+        if (_editingMonitorName)
+            await CompleteMonitorNameEditAsync(save: true, restoreNeutralFocus: false);
+        if (_editingSetupNameId is not null)
+            await CompleteSetupNameEditAsync(save: true, restoreNeutralFocus: false);
+        _editingSetupNameId = setupId;
+        RenderSetupCards();
+    }
+
+    private async void SetupNameEditor_KeyDown(object sender, KeyRoutedEventArgs e)
+    {
+        if (e.Key == Windows.System.VirtualKey.Enter)
         {
-            Text = setup.Name,
-            MaxLength = SetupManager.MaximumSetupNameLength,
-            Style = (Style)Application.Current.Resources["JellyTextBoxStyle"]
-        };
-        var dialog = CreateDialog("Rename Setup", nameBox, "Rename");
-        dialog.Opened += (_, _) => { nameBox.Focus(FocusState.Programmatic); nameBox.SelectAll(); };
-        dialog.PrimaryButtonClick += (_, args) =>
+            e.Handled = true;
+            await CompleteSetupNameEditAsync(save: true, restoreNeutralFocus: true);
+        }
+        else if (e.Key == Windows.System.VirtualKey.Escape)
         {
-            if (!string.IsNullOrWhiteSpace(nameBox.Text)) return;
-            args.Cancel = true;
-            nameBox.Header = "Name is required";
-            nameBox.Focus(FocusState.Programmatic);
-        };
-        var result = await dialog.ShowAsync();
-        if (result != ContentDialogResult.Primary) return;
-        if (!Setups.Rename(setupId, nameBox.Text))
+            e.Handled = true;
+            await CompleteSetupNameEditAsync(save: false, restoreNeutralFocus: true);
+        }
+        else if (e.Key == Windows.System.VirtualKey.Tab)
+        {
+            e.Handled = true;
+            await CompleteSetupNameEditAsync(save: true, restoreNeutralFocus: true);
+            FocusManager.TryMoveFocus(FocusNavigationDirection.Next);
+        }
+    }
+
+    private async void SetupNameEditor_LostFocus(object sender, RoutedEventArgs e)
+        => await CompleteSetupNameEditAsync(save: true, restoreNeutralFocus: false);
+
+    private async Task CompleteSetupNameEditAsync(bool save, bool restoreNeutralFocus)
+    {
+        if (_editingSetupNameId is null) return;
+        var setupId = _editingSetupNameId;
+        var editor = _setupNameEditor;
+        var display = _setupNameDisplay;
+        var focusTarget = _setupNameFocusTarget;
+        _editingSetupNameId = null;
+        _setupNameEditor = null;
+        _setupNameDisplay = null;
+        _setupNameFocusTarget = null;
+        if (editor is not null) editor.Visibility = Visibility.Collapsed;
+        if (display is not null) display.Opacity = 1;
+        if (restoreNeutralFocus) focusTarget?.Focus(FocusState.Pointer);
+
+        if (!save || editor is null) return;
+        if (!Setups.Rename(setupId, editor.Text))
         {
             ShowSetupStatus("Setup name cannot be empty", showUndo: false);
             return;
         }
+
+        var setup = Setups.Find(setupId);
+        if (display is not null) display.Text = setup.Name;
         await SaveSetupStateAsync();
         UpdateSetupPresentation();
-        RenderSetupCards();
         ShowSetupStatus("Setup renamed", showUndo: false);
     }
 
@@ -1072,9 +1152,11 @@ public sealed partial class MainWindow : Window
     private string MonitorDisplayName(MonitorInfo monitor)
         => _setupManager is null ? monitor.FriendlyName : Setups.GetMonitorDisplayName(monitor, _displayList);
 
-    private void MonitorNameButton_Click(object sender, RoutedEventArgs e)
+    private async void MonitorNameButton_Click(object sender, RoutedEventArgs e)
     {
         if (_selected is null || _editingMonitorName) return;
+        if (_editingSetupNameId is not null)
+            await CompleteSetupNameEditAsync(save: true, restoreNeutralFocus: false);
         _editingMonitorName = true;
         _monitorNameEditTarget = _selected;
         MonitorNameEditor.Text = MonitorDisplayName(_selected);
@@ -1089,19 +1171,25 @@ public sealed partial class MainWindow : Window
         if (e.Key == Windows.System.VirtualKey.Enter)
         {
             e.Handled = true;
-            await CompleteMonitorNameEditAsync(save: true);
+            await CompleteMonitorNameEditAsync(save: true, restoreNeutralFocus: true);
         }
         else if (e.Key == Windows.System.VirtualKey.Escape)
         {
             e.Handled = true;
-            await CompleteMonitorNameEditAsync(save: false);
+            await CompleteMonitorNameEditAsync(save: false, restoreNeutralFocus: true);
+        }
+        else if (e.Key == Windows.System.VirtualKey.Tab)
+        {
+            e.Handled = true;
+            await CompleteMonitorNameEditAsync(save: true, restoreNeutralFocus: true);
+            FocusManager.TryMoveFocus(FocusNavigationDirection.Next);
         }
     }
 
     private async void MonitorNameEditor_LostFocus(object sender, RoutedEventArgs e)
-        => await CompleteMonitorNameEditAsync(save: true);
+        => await CompleteMonitorNameEditAsync(save: true, restoreNeutralFocus: false);
 
-    private async Task CompleteMonitorNameEditAsync(bool save)
+    private async Task CompleteMonitorNameEditAsync(bool save, bool restoreNeutralFocus)
     {
         if (!_editingMonitorName) return;
         _editingMonitorName = false;
@@ -1109,6 +1197,7 @@ public sealed partial class MainWindow : Window
         _monitorNameEditTarget = null;
         MonitorNameEditor.Visibility = Visibility.Collapsed;
         MonitorNameButton.Visibility = Visibility.Visible;
+        if (restoreNeutralFocus) MonitorNameButton.Focus(FocusState.Pointer);
         if (save && target is not null && _setupManager is not null)
         {
             if (!Setups.SetMonitorAlias(target, MonitorNameEditor.Text))
