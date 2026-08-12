@@ -1,33 +1,191 @@
 # Pane
 
-Pane is a focused Windows 10/11 wallpaper manager with independent static and slideshow profiles for every connected display.
+**A modern wallpaper manager built around multi-monitor Windows setups.**
 
-## Current milestone
+Pane gives each display its own wallpaper or slideshow and lets you save complete desktop configurations as **Setups**. Switch between them without rebuilding everything monitor by monitor.
 
-- Native WinUI 3 dark/glass dashboard and custom title bar
-- Real monitor enumeration, topology, resolution, primary-display and refresh-rate detection
-- Per-monitor profiles with JSON persistence in `%LOCALAPPDATA%\Pane`
-- Native `IDesktopWallpaper` per-monitor static wallpaper application
-- Non-recursive slideshow catalog, shuffle/sequential order, independent cancellable sessions
-- Static/slideshow pickers, validation, preview, fit, interval, shuffle and loop controls
+> **Pane is currently in preview.**
+> Windows 10/11 · x64
 
-Soft Fade is represented in the profile and UI, but desktop overlay transitions and Identify overlays are intentionally not implemented yet. Wallpaper changes are immediate. Automatic hot-plug monitoring is future work; startup detection and Refresh are available. Closing the window keeps Pane running in the notification area so slideshows continue.
 
-## Build
 
-Requirements: Windows 10 19041+, x64, Visual Studio 2022 with Desktop development with C++ and Windows App SDK support, and the .NET 8 SDK.
+<p align="center">
+  <img src="docs/images/pane-main.png" alt="Pane on Windows" width="900">
+</p>
+
+
+## What Pane does
+
+### Independent control for every monitor
+
+Each connected display gets its own configuration.
+
+* Static wallpapers
+* Independent slideshows
+* Fill, Fit, Stretch and Center
+* Custom slideshow intervals
+* Shuffle or sequential playback
+* Loop control
+* Per-monitor previews
+
+Pane uses Windows' native wallpaper APIs to apply wallpapers directly to individual displays.
+
+### Adaptive Setups
+
+A Setup saves the wallpaper configuration for your whole desktop.
+
+Create different layouts for different uses and switch between them without having to reconfigure every screen.
+
+For example:
+
+* Daily
+* Gaming PC
+* Photography
+* Night
+
+Setups remember their own monitor wallpaper settings and display layout. Pane also keeps track of displays that are temporarily disconnected so their configuration is still there when they return.
+
+Setup switching includes an **Undo** option in case you want to jump straight back to the previous desktop.
+
+### Monitor aliases
+
+Physical monitor names aren't always useful.
+
+Pane lets you rename them to something that actually makes sense, such as:
+
+* Main Monitor
+* Vertical
+* TV
+* Drawing Display
+
+Aliases persist across Setups and are kept separate from the monitor's underlying Windows identity.
+
+### Display-aware interface
+
+Pane reads the monitors connected to Windows and presents their actual desktop arrangement inside the app, including display position, orientation and resolution information.
+
+Saved Setups also include a miniature view of their monitor arrangement and currently assigned wallpapers.
+
+### Runs in the notification area
+
+Closing the Pane window does not stop active slideshows.
+
+Pane can remain running from the Windows notification area and be reopened when you need to make a change.
+
+---
+
+## Download
+
+The latest preview builds are available under **[Releases](https://github.com/yeawrongperson/Pane/releases)**.
+
+Download the Windows x64 ZIP:
+
+```text
+Pane-<version>-win-x64.zip
+```
+
+Extract it somewhere you want to keep Pane, then run:
+
+```text
+Pane.exe
+```
+
+Pane is currently distributed as an unpackaged, self-contained Windows application. There is no installer in the preview release.
+
+### Windows SmartScreen
+
+Preview builds are currently **unsigned**.
+
+Windows may show an **Unknown Publisher** or SmartScreen warning when opening Pane for the first time. Code signing is planned for a future release.
+
+---
+
+## Requirements
+
+* Windows 10 version 2004 / build 19041 or newer
+* Windows 11
+* x64 PC
+
+---
+
+## Preview status
+
+Pane is usable, but it is still early software.
+
+The current preview focuses on getting the core multi-monitor experience right: wallpapers, independent slideshows, monitor detection, persistent configuration and Adaptive Setups.
+
+There are still features I want to add, and parts of the interface may change as Pane develops.
+
+Some areas planned for future versions include:
+
+* Faster controls from the notification area
+* More slideshow controls
+* Automatic Setup switching
+* Wallpaper transitions
+* Additional drag-and-drop interactions
+* Import/export and backup options
+* General onboarding and settings improvements
+
+No dates are attached to the roadmap.
+
+---
+
+## Data and configuration
+
+Pane stores its configuration locally under:
+
+```text
+%LOCALAPPDATA%\Pane
+```
+
+This includes saved Setups, monitor configuration and wallpaper state.
+
+Wallpaper files remain in their original locations. Pane references the files you select rather than maintaining a separate copy of your image library.
+
+---
+
+## Building from source
+
+Pane is built with:
+
+* C#
+* .NET 8
+* WinUI 3
+* Windows App SDK
+
+Development requirements:
+
+* Windows 10 19041+ or Windows 11
+* x64
+* Visual Studio 2022
+* .NET 8 SDK
+* Windows App SDK development support
+
+Restore the solution:
 
 ```powershell
 dotnet restore Wallflow.slnx
-# Run from a Visual Studio Developer PowerShell:
-msbuild Wallflow.slnx /p:Configuration=Debug /p:Platform=x64
-dotnet test tests/Wallflow.Core.Tests/Wallflow.Core.Tests.csproj
-# Launch src\Wallflow\bin\x64\Debug\net8.0-windows10.0.19041.0\win-x64\Pane.exe
 ```
 
-Debug builds are unpackaged and framework-dependent for straightforward development launches.
+From a Visual Studio Developer PowerShell, build x64:
 
-## Building a Release
+```powershell
+msbuild Wallflow.slnx /p:Configuration=Debug /p:Platform=x64
+```
+
+Run the core tests:
+
+```powershell
+dotnet test tests/Wallflow.Core.Tests/Wallflow.Core.Tests.csproj
+```
+
+Debug builds are unpackaged and framework-dependent.
+
+---
+
+## Building a release
+
+Pane includes a release pipeline for producing the self-contained Windows build.
 
 From the repository root:
 
@@ -35,20 +193,32 @@ From the repository root:
 .\scripts\release.ps1
 ```
 
-If Windows blocks local PowerShell scripts under its current execution policy, use the included launcher instead (it changes policy only for that process):
+A specific version can also be supplied:
 
 ```powershell
-.\scripts\release.cmd
+.\scripts\release.ps1 -Version 0.2.0-preview
 ```
 
-To override the version for one release:
+Release output is written to:
 
-```powershell
-.\scripts\release.ps1 -Version 0.1.1-beta
+```text
+artifacts\releases\
 ```
 
-The default version is defined near the top of `Directory.Build.props`. Releases are always unpackaged, self-contained, x64, and built in Release configuration. Output is written to `artifacts\releases\`.
+The distributable artifact is:
 
-Distribute only the generated `Pane-<version>-win-x64.zip`. Do not distribute `bin`, `obj`, Debug output, test assemblies, or individual intermediate DLLs.
+```text
+Pane-<version>-win-x64.zip
+```
 
-Pane beta builds are currently unsigned, so Windows SmartScreen may display an unknown-publisher warning. Clean-machine testing guidance is in `docs\RELEASE_TESTING.md`.
+Do not distribute files from `bin`, `obj`, Debug output or intermediate build directories.
+
+The release pipeline builds Pane in Release/x64, runs the automated tests, publishes the self-contained application, performs an isolated smoke test and creates the final ZIP and SHA-256 checksum.
+
+---
+
+## Project status
+
+Pane is currently developed and maintained as an independent project.
+
+Bug reports and useful feedback are welcome while the preview develops.
