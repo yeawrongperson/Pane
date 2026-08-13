@@ -8,9 +8,8 @@ Pane gives each display its own wallpaper or slideshow and lets you save complet
 > Windows 10/11 · x64
 
 <p align="center">
-  <img src="docs/0.3.1 preview screenshots 1.png" alt="Pane main interface" width="48%">
+  <img src="docs/0.3.1 preview screenshots 1.png" alt="Pane main interface" width="90%">
   &nbsp;
-  <img src="docs/0.3.1 preview screenshots 2.png" alt="Pane Adaptive Setups" width="48%">
 </p>
 
 ## What Pane does
@@ -31,6 +30,9 @@ Each connected display gets its own wallpaper configuration.
 Pane uses Windows' native wallpaper APIs to apply wallpapers directly to individual displays.
 
 ### Adaptive Setups
+
+<p>  <img src="docs/0.3.1 preview screenshots 2.png" alt="Pane Adaptive Setups" width="48%">
+</p>
 
 A **Setup** saves the wallpaper configuration for your desktop so you can switch between different groups of wallpapers and slideshows without reconfiguring every monitor.
 
