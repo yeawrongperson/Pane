@@ -8,9 +8,9 @@ Pane gives each display its own wallpaper or slideshow and lets you save complet
 > Windows 10/11 · x64
 
 <p align="center">
-  <img src="docs/0.3.1 preview screenshots_Main_good.png" alt="Pane main interface" width="48%">
+  <img src="docs/0.3.1 preview screenshots 1.png" alt="Pane main interface" width="48%">
   &nbsp;
-  <img src="docs/0.3.1 preview screenshots_Main_2.png" alt="Pane Adaptive Setups" width="48%">
+  <img src="docs/0.3.1 preview screenshots 2.png" alt="Pane Adaptive Setups" width="48%">
 </p>
 
 ## What Pane does
