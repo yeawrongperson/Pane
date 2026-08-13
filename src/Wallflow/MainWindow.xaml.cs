@@ -1300,6 +1300,7 @@ public sealed partial class MainWindow : Window
     private void SelectMonitor(MonitorInfo monitor)
     {
         _selected = monitor; var profile = Profile(monitor); Editor.IsHitTestVisible = true; Editor.Opacity = 1; SelectedName.Text = MonitorDisplayName(monitor); MonitorNameButton.IsEnabled = true;
+        UpdateWallpaperPreviewViewport();
         AutomationProperties.SetName(MonitorNameButton, $"Rename {SelectedName.Text}");
         var displayDetails = new List<string> { monitor.Resolution };
         if (monitor.IsPrimary) displayDetails.Add("Primary display");
@@ -1433,6 +1434,17 @@ public sealed partial class MainWindow : Window
             SelectedName.Text = MonitorDisplayName(_selected);
             AutomationProperties.SetName(MonitorNameButton, $"Rename {SelectedName.Text}");
         }
+    }
+    private void WallpaperPreviewStage_SizeChanged(object sender, SizeChangedEventArgs e) => UpdateWallpaperPreviewViewport();
+    private void UpdateWallpaperPreviewViewport()
+    {
+        var viewport = WallpaperPreviewLayout.Calculate(
+            WallpaperPreviewStage.ActualWidth,
+            WallpaperPreviewStage.ActualHeight,
+            _selected?.Width ?? 0,
+            _selected?.Height ?? 0);
+        WallpaperPreviewViewport.Width = viewport.Width;
+        WallpaperPreviewViewport.Height = viewport.Height;
     }
     private void SetPreview(string? path) { var exists = File.Exists(path); EmptyPreview.Visibility = exists ? Visibility.Collapsed : Visibility.Visible; WallpaperPreview.Stretch = _selected is null ? Stretch.Uniform : PreviewStretch(Profile(_selected).FitMode); WallpaperPreview.Source = exists ? new BitmapImage(new Uri(path!)) : null; }
     private async void Refresh_Click(object sender, RoutedEventArgs e) { CommitEditorToProfile(); await RefreshAsync(); }
