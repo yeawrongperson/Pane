@@ -10,9 +10,9 @@ Pane gives each display its own wallpaper or slideshow and lets you save complet
 
 
 <p align="center">
-  <img src="docs/Pane screenshot 1.png" alt="Pane main interface" width="48%">
+  <img src="docs/0.3.1 preview screenshots_Main_1.png" alt="Pane main interface" width="48%">
   &nbsp;
-  <img src="docs/Pane screenshot 2.png" alt="Pane Adaptive Setups" width="48%">
+  <img src="docs/0.3.1 preview screenshots_Main_2.png" alt="Pane Adaptive Setups" width="48%">
 </p>
 
 ## What Pane does
