@@ -31,7 +31,8 @@ Pane uses Windows' native wallpaper APIs to apply wallpapers directly to individ
 
 ### Adaptive Setups
 
-<p>  <img src="docs/0.3.1 preview screenshots 2.png" alt="Pane Adaptive Setups" width="48%">
+<p align="center"> 
+  <img src="docs/0.3.1 preview screenshots 2.png" alt="Pane Adaptive Setups" width="65%">
 </p>
 
 A **Setup** saves the wallpaper configuration for your desktop so you can switch between different groups of wallpapers and slideshows without reconfiguring every monitor.
